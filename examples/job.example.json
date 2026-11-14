@@ -1,0 +1,28 @@
+{
+  "jobId": "2026-01-01-example",
+  "figma": {
+    "fileKey": "",
+    "nodeId": "0:0"
+  },
+  "trim": {
+    "preset": "A4"
+  },
+  "bleedMm": 3,
+  "scaleInPdf": true,
+  "source": {
+    "pdf": "source/0-0.pdf",
+    "sha256": ""
+  },
+  "output": {
+    "ai": "2026-01-01-example.ai",
+    "pdf": "2026-01-01-example.pdf"
+  },
+  "pdfxStandard": "PDF/X-4:2010",
+  "tacLimitPercent": 300,
+  "pdfExport": {
+    "fileName": "2026-01-01-example.pdf",
+    "contract": "pdfx-4-2010",
+    "layout": "marks",
+    "marginMm": 14
+  }
+}

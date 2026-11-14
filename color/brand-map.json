@@ -1,0 +1,5 @@
+{
+  "_note": "Optional colour vocabulary. Add an entry only for a colour you can trace to a design token, a layer name, or a measurement. Leave it empty and every colour is reported as descriptive. Set toleranceDeltaE00 only after the print buyer confirms a number in writing.",
+  "toleranceDeltaE00": null,
+  "colors": {}
+}

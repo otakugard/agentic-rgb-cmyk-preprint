@@ -1,0 +1,39 @@
+{
+  "ok": true,
+  "fixture": "temporary; not a delivery PDF",
+  "checks": {
+    "bleedWhiteDetected": {
+      "pass": true,
+      "value": 146916,
+      "expected": "> 0"
+    },
+    "tacOverLimitDetected": {
+      "pass": true,
+      "value": {
+        "status": "fail",
+        "visibleMax": 325.88,
+        "vector": {
+          "tac": 325.78,
+          "cmyk": [
+            89.06,
+            78.32,
+            61.52,
+            96.88
+          ],
+          "count": 1,
+          "visiblePixels300": 7056,
+          "visibleAt300": true
+        }
+      },
+      "expected": "fail at limit 300%"
+    },
+    "bleedBandIsFull3mm": {
+      "pass": true,
+      "value": {
+        "x": 3.048,
+        "y": 3.048
+      },
+      "expected": ">= 3.0 mm final"
+    }
+  }
+}

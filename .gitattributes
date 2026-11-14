@@ -1,0 +1,6 @@
+# Text normalisation for a cross-platform checkout
+*.md   text eol=lf
+*.json text eol=lf
+*.sh   text eol=lf
+*.py   text eol=lf
+*.jsx  text eol=lf

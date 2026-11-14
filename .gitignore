@@ -1,0 +1,27 @@
+# macOS
+.DS_Store
+
+# Python
+.venv/
+__pycache__/
+*.pyc
+
+# Job data: artwork, client names, evidence
+jobs/*
+!jobs/.gitkeep
+
+# Local ICC profiles
+color/profiles/*.icc
+!color/profiles/README.md
+
+# Runtime caches and snapshots (may contain absolute paths)
+color/probe-cache.json
+color/figma-baseline.json
+color/figma-final.json
+
+# Runtime state
+*.lock
+jobs/*/.run-token
+
+# Audit logs (contain absolute paths)
+audits/*.err

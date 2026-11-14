@@ -1,0 +1,72 @@
+{
+  "_note": "Single source of truth for print parameters. Edit this file, not a job. Record why you changed it.",
+  "_setup": [
+    "Set print.iccProfile to an ICC file you installed locally. This repo does not ship ICC profiles.",
+    "Set figma.fileKey and figma.nodeId per job, or leave figma.* empty and put them in job.json.",
+    "Run install/verify.sh after editing."
+  ],
+  "version": 1,
+  "figma": {
+    "fileKey": "",
+    "fileName": "",
+    "designUrl": "",
+    "teamKey": "",
+    "teamName": "",
+    "folderId": "",
+    "exportFormat": "pdf",
+    "exportScale": 1,
+    "pxToPt": 0.75,
+    "pxToPtReason": "Figma writes 1 px as 1 pt in PDF exports. Multiply by 0.75 on import to recover the true size.",
+    "notes": [
+      "download_assets handles one node per call.",
+      "The exported PDF uses sRGB2014 (ICCBased), with no OutputIntent and no CMYK.",
+      "Text is outlined as Type3 FigmaGlyphs. There is no editable text.",
+      "Bitmaps keep their pixel dimensions but use DCTDecode (JPEG), so they are lossy.",
+      "Drop shadows use /SMask. PDF/X-4 can keep them.",
+      "rawImages returns the original uploaded file when you need lossless pixels."
+    ]
+  },
+  "print": {
+    "iccProfile": "color/profiles/iso-coated-v2-300.icc",
+    "iccName": "ISO Coated v2 300% (ECI)",
+    "colorPolicy": "European FOGRA workflow. Baseline Coated FOGRA39. Delivery ICC: ISO Coated v2 300% (ECI). conversion.json is the authority for what was used.",
+    "outputConditionID": "ISO Coated v2 300% (ECI)",
+    "outputCondition": "ISO Coated v2 300% (ECI), FOGRA39L, ISO 12647-2:2004/Amd 1, TAC 300%",
+    "pdfxStandard": "PDF/X-4:2010",
+    "pdfxNote": "PDF/X-4:2010 by default. 08-gate3 verifies the structure. A normal PDF 1.6 is not PDF/X. State the evidence source when you claim it. A written print-shop requirement overrides this file.",
+    "renderingIntent": 1,
+    "renderingIntentName": "Relative Colorimetric",
+    "blackPointCompensation": true,
+    "tacLimitPercent": 300,
+    "tacLimitNote": "Default limit 300%, matching ISO Coated v2 300% (ECI). Fix an overrun with a proper colour conversion or ink limiting. Do not clip channels and do not round.",
+    "bleedMm": 3,
+    "bleedReason": "Build the source artboard with 3 mm bleed on each side. Keep the artboard at trim and leave the extra artwork outside it. 01d or 02 scales to trim and the artwork extends 3 mm.",
+    "textPolicy": "outlined",
+    "textPolicyReason": "Figma outlines all text. Text in the .ai is not editable. Text changes need a Figma rerun.",
+    "ppi": {
+      "base": 300,
+      "warnBelow": 300,
+      "note": "Effective ppi = image pixels divided by the placed size. Report WARN when the match is ambiguous. Do not FAIL on it."
+    }
+  },
+  "ghostscript": {
+    "binary": "gs",
+    "imageEncoding": "flate",
+    "imageEncodingReason": "Flate is lossless. Printing favours fidelity over file size. No second JPEG generation.",
+    "note": "The only RGB-to-CMYK conversion point. Pass the delivery ICC explicitly. Do not rely on Illustrator workspace settings."
+  },
+  "illustrator": {
+    "appPath": "/Applications/Adobe Illustrator 2024/Adobe Illustrator.app",
+    "appName": "Adobe Illustrator",
+    "expectedVersionPrefix": "28.",
+    "pdfPresetName": "PDFX4-FOGRA39",
+    "timeoutSeconds": 300
+  },
+  "trimPresetsMm": {
+    "A3": [297, 420],
+    "A4": [210, 297],
+    "A5": [148, 210],
+    "bizcard": [85, 55],
+    "DL": [99, 210]
+  }
+}

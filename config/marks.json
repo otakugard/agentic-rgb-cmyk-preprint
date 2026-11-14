@@ -1,0 +1,11 @@
+{
+  "style": "jp-double",
+  "source": "drawn",
+  "offsetMm": 3.0,
+  "outerMm": 12.0,
+  "lineWidthPt": 0.3,
+  "crossLongPt": 72.0,
+  "crossShortPt": 24.0,
+  "crossDistPt": 18.0,
+  "colorBars": false
+}
