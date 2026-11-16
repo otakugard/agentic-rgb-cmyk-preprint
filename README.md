@@ -240,12 +240,10 @@ jobs/                      per-job working directories (git-ignored)
 
 ## Security and privacy
 
-- No credentials are stored in this repository.
-- `jobs/` is git-ignored. Job evidence can contain client artwork and names.
-- Scripts call Illustrator through AppleScript and write only inside the job
-  directory and the repo.
-- Review `scripts/run.sh` before you let an agent execute it. It starts
-  Illustrator and can replace a job's `.ai` file.
+- Scripts drive Illustrator through AppleScript. They write only inside the job
+  directory and the repository.
+- `scripts/run.sh` starts Illustrator and can replace a job's `.ai` file. Approve
+  it before an agent runs it.
 
 ---
 
