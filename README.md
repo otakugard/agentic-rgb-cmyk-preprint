@@ -249,4 +249,27 @@ jobs/                      per-job working directories (git-ignored)
 
 ## License
 
-MIT. See [`LICENSE`](LICENSE).
+MIT, © 2026 The agentic-rgb-cmyk-preprint authors. SPDX identifier: `MIT`.
+Full text in [`LICENSE`](LICENSE).
+
+This repository redistributes no third-party binaries, ICC profiles, or fonts.
+Ghostscript and LittleCMS run as separate processes. qpdf and MuPDF are optional
+manual checks.
+
+| Tool | Role | Licence |
+|---|---|---|
+| Ghostscript 10.x | the only RGB to CMYK conversion | AGPL-3.0-or-later |
+| LittleCMS (`tificc`, `transicc`) | ICC Lab and DeltaE00 prediction | MIT |
+| pypdf | PDF inspection | BSD-3-Clause |
+| numpy | raster checks | BSD-3-Clause, plus 0BSD, MIT, Zlib, CC0-1.0 in bundled parts |
+| qpdf | structural check, run by hand | Apache-2.0 |
+| MuPDF (`mutool`) | visual diff, run by hand | AGPL-3.0-or-later |
+| Adobe Illustrator | import, QA, geometry | proprietary; you supply the licence |
+
+Ghostscript and MuPDF carry AGPL-3.0-or-later. Ghostscript runs through
+`subprocess`; MuPDF stays a manual tool. The pipeline links no library code from
+either. A product that bundles their binaries needs its own licence review.
+
+Licence names come from package metadata on the release-test machine:
+Ghostscript 10.08.0, LittleCMS 2.20, qpdf 12.4.2, MuPDF 1.28.6, pypdf 6.21.4,
+numpy 2.5.4.
