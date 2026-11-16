@@ -2,8 +2,8 @@
 
 /*
  * 00-smoke.jsx
- * 冒烟测试：只读，不创建文档。验证 AppleScript → ExtendScript 通路、版本、
- * 以及 run.sh 注入的 JOB_DIR / SPEC_PATH 是否可用。
+ * Smoke test: read-only, creates no document. Checks the AppleScript to ExtendScript
+ * path, the version, and whether run.sh injected usable JOB_DIR / SPEC_PATH.
  */
 
 var RESULT_PATH = JOB_DIR + "/result.json";

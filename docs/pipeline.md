@@ -18,7 +18,7 @@ jobs/<job-id>/
   color-mapping.md         human-readable mapping
   proof.json               three-way comparison
   gate3.json               08 result
-  qa.json / qa.md          final report
+  qa.json / qa.md / checklist.md   final report
 ```
 
 `job-id` is `YYYY-MM-DD-<slug>`. `output.ai` must contain the job id.
@@ -82,7 +82,8 @@ reference TIFF. Never saves. Never overwrites the source.
 
 Opens `cmyk-final.pdf` when scaled, else `cmyk.pdf`. Groups the layer, sets the
 artboard to trim, keeps the artwork 3 mm past the artboard, saves `<job-id>.ai`.
-No colour conversion. Stops if the document is not CMYK.
+The script handles geometry and colour mode; the CMYK values stay as converted.
+Stops if the document is not CMYK.
 
 ### 03-qa.jsx
 
@@ -107,7 +108,8 @@ tuples, and reports ICC-predicted Lab / DeltaE00. All DeltaE00 values are
 predictions, not measurements.
 
 Reads `work/konly-targets.json` when present and forces those tuples, so an
-authorised override is an explicit input rather than a nearest-match guess.
+authorised override is an explicit input. Without that file, the match step picks
+the nearest CMYK tuple present in `cmyk.pdf`.
 
 ### 07-proof.py
 
@@ -123,8 +125,8 @@ double-line marks and cross marks from `config/marks.json` (stroked in
 the GTS_PDFX OutputIntent with the delivery ICC, XMP `GTS_PDFXVersion`, and
 Info `/GTS_PDFXVersion` + `/Trapped`.
 
-It does not export through Illustrator. Illustrator 28.4.1 hangs on the PDF/X
-dialog when driven by AppleScript.
+`07c` builds the PDF itself. Illustrator 28.4.1 hangs on the PDF/X dialog when
+driven by AppleScript.
 
 ### 08-gate3.py
 
@@ -153,5 +155,5 @@ ICC, config, intermediate, AI, and PDF hashes.
 | `brand-map.json` | 06, 08, 04 |
 | `marks.json` | 07c, 08, 04 |
 
-Skipping a rerun lets a stale gate vouch for a new file. The gates bind hashes
-so this shows up, but only if the upstream hash actually changed.
+Skipping a rerun lets a stale gate vouch for a new file. Hash binding reports the
+stale gate when the upstream hash changed.

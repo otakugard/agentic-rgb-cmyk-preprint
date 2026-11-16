@@ -1,17 +1,16 @@
 # Audits
 
 Two read-only audits, run with `codex exec` (model `gpt-6.1-sol`, reasoning
-`high`, sandbox `read-only`). No files were modified by the auditor and no web
-search was used.
+`high`, sandbox `read-only`). The auditor ran read-only and used no web search.
 
 | Round | Scope | Verdict | Report |
 |---|---|---|---|
 | Start | the private source subtree, before productization | not publishable as-is | [`start-audit.md`](start-audit.md) (redacted) |
 | End | this public repository, four review passes | **PASS** | [`end-audit.md`](end-audit.md) |
 
-The start report is redacted: client names, keys, node ids, and colour values
-were removed from the published copy. The end audit ran four passes because each
-pass found real defects; the findings below were fixed before release.
+This copy removes client names, keys, node ids, and colour values. The end audit
+ran four passes because each pass found real defects; the findings below were
+fixed before release.
 
 ## Defects found and fixed
 
@@ -67,6 +66,6 @@ pass found real defects; the findings below were fixed before release.
 
 ## Limits of this audit
 
-Both audits are static reviews. They did not run Illustrator, did not write a
-candidate PDF during review, and did not verify print output. ICC redistribution
-terms remain the user's responsibility; this repository ships no ICC files.
+Both audits are static reviews of source and docs. Illustrator, PDF generation,
+and print output were outside the review. ICC redistribution terms remain the
+user's responsibility; this repository ships no ICC files.

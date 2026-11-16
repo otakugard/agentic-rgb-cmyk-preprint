@@ -1,7 +1,7 @@
 # Known limits and tested failure modes
 
-These are measured behaviours, not guesses. Each item lists the symptom and the
-handling used by this repository.
+These are measured behaviours. Each item lists the symptom and the handling used
+by this repository.
 
 ## Figma and import
 
@@ -55,7 +55,7 @@ handling used by this repository.
 
 ## Scope
 
+- The pipeline accepts RGB only and converts once. Re-separating CMYK input is
+  a separate job.
 - One page per job. Multi-page sources are rejected.
-- No CMYK source. This pipeline converts RGB once; it does not re-separate.
-- No automatic correction of colour, geometry, text, or overprint to satisfy a
-  check.
+- Colour, geometry, text, and overprint change only through explicit inputs.

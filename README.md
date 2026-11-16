@@ -4,7 +4,8 @@ An evidence-first prepress pipeline that turns a Figma RGB export into a CMYK
 Illustrator file and a PDF/X-4 candidate, with machine-checkable gates.
 
 It is built for one narrow job: **Figma → Illustrator (macOS) → PDF/X-4**, with
-Ghostscript as the only colour conversion point and no silent fixes.
+Ghostscript as the only colour conversion point and every change as an explicit
+input.
 
 ```
 Figma PDF (sRGB, no OutputIntent)
@@ -16,7 +17,8 @@ Figma PDF (sRGB, no OutputIntent)
 ```
 
 Every step writes JSON evidence. PASS needs evidence. A missing check is
-PENDING, never PASS. A candidate PDF is not a final delivery.
+PENDING. A candidate PDF stays a candidate: delivery needs Gate 3 PASS and the
+print shop's written approval.
 
 ---
 
@@ -25,7 +27,7 @@ PENDING, never PASS. A candidate PDF is not a final delivery.
 Most RGB-to-CMYK damage happens quietly:
 
 - The conversion uses whatever CMYK workspace the operator happens to have.
-- A check passes because the script ran, not because the file is correct.
+- A check passes because the script ran. The file can still be wrong.
 - A stale gate result gets attached to a new PDF.
 - A "fix" changes the artwork to satisfy a checker.
 
@@ -36,7 +38,7 @@ This pipeline encodes the opposite rules:
 | One conversion point | Ghostscript with explicit ICC, intent, BPC in `conversion.json` |
 | No colour repair in Illustrator | `02-import-convert.jsx` only handles geometry |
 | Evidence over claims | `gate3.json`, `qa.json`, SHA-256 binding for source, PDF, AI, config |
-| Honest states | `PASS` / `FAIL` / `PENDING` / `WARN`; `ok:true` only means the script ran |
+| Honest states | `PASS` / `FAIL` / `PENDING` / `WARN`; `ok:true` reports script completion, acceptance is separate |
 | Authorised changes stay visible | Single-K and overprint overrides are explicit inputs and stay PENDING |
 
 ---
@@ -57,9 +59,9 @@ This pipeline encodes the opposite rules:
 | Proof profiles | Adobe Coated FOGRA39 + sRGB | soft proof, Gate 3 visual checks |
 
 The Python-only steps run on Linux and Windows. The `.jsx` steps and `run.sh`
-need macOS with Illustrator 2024 (28.0) or newer. Newer releases are used as
-they are; the version check is a minimum, not an exact match. The failure modes
-in `docs/limitations.md` were measured on 28.4.1.
+need macOS with Illustrator 2024 (28.0) or newer. Newer releases work as they
+are; the version check accepts 2024 (28.0) and newer. The failure modes in
+`docs/limitations.md` were measured on 28.4.1.
 
 `config/print-spec.json` → `illustrator.appPath` selects the application. Leave
 it empty and `run.sh` uses the newest `/Applications/Adobe Illustrator*/Adobe
@@ -69,12 +71,12 @@ macOS must allow your terminal (or agent) to control Illustrator:
 System Settings → Privacy & Security → Automation. Without it, every
 `run.sh` call fails with an AppleEvent error.
 
-This repository **does not ship ICC profiles**. See
+You supply the ICC profiles. See
 [`color/profiles/README.md`](color/profiles/README.md).
 
 ---
 
-## Install — manual
+## Install (manual)
 
 ```bash
 git clone <this-repo> agentic-rgb-cmyk-preprint
@@ -105,7 +107,7 @@ source .venv/bin/activate
 
 `install/verify.sh` checks Illustrator, Ghostscript, Python deps, the ICC file,
 config parsing, and tool availability. Add `--full` to also run the negative
-preflight fixture. It does not modify files (the fixture writes its result).
+preflight fixture, which writes only its result file.
 
 ### First job
 
@@ -131,38 +133,12 @@ Run all commands from the repository root. Scripts resolve `config/`,
 
 ---
 
-## Install — agent
+## Install (agent)
 
-Copy this prompt into an agent with shell access (Codex, Claude Code, or
-similar). It installs, verifies, and reports. It does not run a print job.
-
-```text
-Install the repository at <path>/agentic-rgb-cmyk-preprint on this macOS machine.
-Read README.md, install/verify.sh, and color/profiles/README.md before you start.
-
-Do:
-1. Check macOS, Adobe Illustrator 2024 (28.0) or newer, Ghostscript 10.x, LittleCMS
-   (tificc, transicc), Python 3.11+, qpdf, and mupdf. Report versions. Confirm the terminal has Automation
-   permission for Illustrator (System Settings → Privacy & Security → Automation).
-2. Install missing Homebrew packages: ghostscript little-cms2 qpdf mupdf-tools python@3.12.
-3. Create .venv and install requirements.txt.
-4. Find a local ISO Coated v2 300% (ECI) ICC and an sRGB ICC. Copy them into
-   color/profiles/ and set print.iccProfile in config/print-spec.json.
-   If no ICC exists, stop and ask. Do not download ICC files from unknown hosts.
-5. Run ./install/verify.sh. Paste the output.
-6. Run: source .venv/bin/activate && python3 scripts/09-selftest.py
-   Confirm the expected FAIL and report the numbers.
-
-Do not:
-- Modify files under scripts/ to make checks pass.
-- Change config values other than print.iccProfile.
-- Claim PDF/X compliance or print readiness.
-- Run a production job.
-
-Report: versions, ICC paths, verify.sh output, selftest result, and any gap.
-```
-
-The same prompt ships as [`docs/install-agent.md`](docs/install-agent.md).
+An agent with shell access can install, verify, and report. The prompt, the pass
+conditions, and the prohibitions live in
+[`docs/install-agent.md`](docs/install-agent.md). The agent installs the tools and
+runs the self test; it stops before any print job.
 
 ---
 
@@ -210,9 +186,9 @@ See [`docs/pipeline.md`](docs/pipeline.md) for inputs, outputs, and rerun rules.
 | Gate 2 | Did the conversion preserve the approved artwork? | CMYK tuples, visible proof, bleed, structure |
 | Gate 3 | Is the candidate PDF structurally printable? | OutputIntent, boxes, bleed content, no RGB, fonts, TAC, marks |
 
-Gate 2 PASS does not mean print approval. Gate 3 PASS does not mean the print
-shop accepted the file. Soft proof, contract proof, and press conditions remain
-external.
+Gate 2 PASS covers conversion integrity; approval is the print shop's decision.
+Gate 3 PASS covers output structure; shop acceptance, contract proof, and press
+conditions stay external.
 
 Details: [`docs/gates.md`](docs/gates.md).
 
@@ -231,13 +207,14 @@ never `source/`.
 
 ---
 
-## What this does not do
+## Scope
 
-- It does not design. It does not write to Figma.
-- It does not edit text. Figma outlines text before export.
-- It does not replace Acrobat preflight, a contract proof, or the print shop.
-- It does not ship fonts, ICC profiles, or Adobe assets.
-- It does not claim PDF/X. It verifies PDF/X structure and reports the evidence.
+- Design work and Figma writes belong to Figma. This pipeline reads the export.
+- Text arrives outlined. Edit it in Figma and re-export.
+- Acrobat Preflight, the contract proof, and the press run are separate checks.
+- Fonts, ICC profiles, and Adobe assets come from your machine.
+- PDF/X: the pipeline verifies the structure and reports the evidence. The print
+  shop accepts the file.
 
 Known limits and tested failures: [`docs/limitations.md`](docs/limitations.md).
 
@@ -252,7 +229,7 @@ color/brand-map.json       optional colour vocabulary
 color/profiles/            your ICC files (not shipped)
 scripts/                   pipeline
   lib/                     PDF, ICC, raster, marks, acceptance
-docs/                      pipeline, gates, limits, install
+docs/                      pipeline, gates, limits, install, writing rules
 examples/job.example.json  job schema
 install/                   verify and helper scripts
 tests/                     negative fixtures

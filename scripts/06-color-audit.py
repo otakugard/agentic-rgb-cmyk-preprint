@@ -275,27 +275,27 @@ def main():
             (prepare.get("sourceICC") or {}).get("description", "?"),
             icc_sha[:16], target_sha[:16]),
         "",
-        "转换：%s intent %d, BPC %s, OverrideICC %s。色差为 **ICC 预测值，非实物测量**。" % (
+        "Conversion: %s intent %d, BPC %s, OverrideICC %s. Delta E is an **ICC prediction, not a measurement on paper**." % (
             conv["renderingIntentName"], conv["renderingIntent"],
             conv["blackPointCompensation"], conv["overrideICC"]),
         "",
-        "| 语义 | HEX | RGB | FOGRA39 CMYK | TAC | 预测 ΔE00 | 控制探针差 | PDF/AI 次数 | 命名依据 |",
+        "| Meaning | HEX | RGB | FOGRA39 CMYK | TAC | Predicted ΔE00 | Control probe delta | PDF/AI count | Naming basis |",
         "|---|---|---|---|---:|---:|---:|---:|---|",
     ]
     for r in rows:
         ai_count = "?" if r.get("aiOperators") is None else str(r["aiOperators"])
         cmyk_text = (" / ".join("%.1f" % x for x in r["actualCmyk"])
-                     if r.get("actualCmyk") else "未匹配")
+                     if r.get("actualCmyk") else "unmatched")
         tac_text = "%.1f%%" % r["tacPercent"] if r.get("tacPercent") is not None else "—"
         de_text = "%.2f" % r["deltaE00Predicted"] if r.get("deltaE00Predicted") is not None else "—"
         cmm_text = "%.2f" % r["deltaE00CmmDifference"] if r.get("deltaE00CmmDifference") is not None else "—"
         lines.append("| %s | %s | %s | %s | %s | %s | %s | %d / %s | %s |" % (
-            r["name"] or "未命名", r["hex"], "/".join(str(x) for x in r["rgb"]),
+            r["name"] or "unnamed", r["hex"], "/".join(str(x) for x in r["rgb"]),
             cmyk_text, tac_text, de_text, cmm_text, r["pdfOperators"],
-            ai_count, r["nameSource"] or "未确认"))
+            ai_count, r["nameSource"] or "unconfirmed"))
     if payload["tolerance"]["status"] == "pending":
-        lines += ["", "品牌色容差未确认：上表 ΔE00 只作比较，不判“合格”。"]
-    lines += ["", "源稿 ICC 与目标 ICC 的 SHA-256 已写入 `color-audit.json`。"]
+        lines += ["", "Brand colour tolerance is unconfirmed: the ΔE00 values above are for comparison only; they do not decide pass or fail."]
+    lines += ["", "The SHA-256 of the source ICC and the target ICC is written to `color-audit.json`."]
     with open(os.path.join(job_dir, "color-mapping.md"), "w", encoding="utf-8") as fh:
         fh.write("\n".join(lines) + "\n")
 

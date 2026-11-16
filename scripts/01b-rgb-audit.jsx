@@ -2,10 +2,10 @@
 
 /*
  * 01b-rgb-audit.jsx
- * 只读打开 source/ 里的 Figma PDF，记录 Illustrator 实际看到的颜色、字体、
- * 位图与画板，并导出 150 dpi TIFF 供 Gate 1 对照。
+ * Open the Figma PDF in source/ read-only. Record the colours, fonts, rasters and
+ * artboards that Illustrator actually sees, then export a 150 dpi TIFF for the Gate 1 comparison.
  *
- * 不保存、不覆盖 source/；关闭时不保存。所有输出写 work/。
+ * Do not save and do not overwrite source/. Close without saving. All output goes to work/.
  */
 
 var RESULT_PATH = JOB_DIR + "/result.json";
@@ -62,8 +62,8 @@ try {
   out.jobId = job.jobId || null;
   var src = JOB_DIR + "/" + job.source.pdf;
   out.input = job.source.pdf;
-  /* 01-prepare 会把 Figma 的矩形 alpha 裁切蒙版改写成白色填充的 alpha 蒙版；
-     Illustrator 才能正确看到版面。源文件不动，这里只读该副本。 */
+  /* 01-prepare rewrites the Figma rectangular alpha clip masks into white-filled
+     alpha masks, so Illustrator sees the layout correctly. The source stays unchanged; this reads the copy only. */
   var cleaned = new File(JOB_DIR + "/work/source-white.pdf");
   if (job.maskPolicy === "whiten-alpha") {
     var prepPath = JOB_DIR + "/prepare.json";
@@ -82,14 +82,14 @@ try {
     src = JOB_DIR + "/work/source-white.pdf";
     out.input = "work/source-white.pdf";
     out.warningCleanedSource = true;
-    out.warnings.push("RGB 审计使用 work/source-white.pdf（alpha 裁切蒙版已改写为白色填充的 alpha 蒙版），源文件未修改");
+    out.warnings.push("The RGB audit uses work/source-white.pdf (alpha clip masks rewritten as white-filled alpha masks); the source file is unchanged");
   }
   var f = new File(src);
   if (!f.exists) throw new Error("source PDF missing: " + src);
 
   app.userInteractionLevel = UserInteractionLevel.DONTDISPLAYALERTS;
 
-  /* 不碰用户已打开的同一份文档 */
+  /* Do not touch a document the user already has open */
   var preOpen = [];
   for (var d = 0; d < app.documents.length; d++) {
     try { preOpen.push(String(app.documents[d].fullName)); } catch (e0) {}
@@ -169,8 +169,8 @@ try {
   }
   out.scanErrors = scanErrors;
 
-  /* pathItems 覆盖 group / compound path 内部；pageItems 的顶层统计会漏掉
-     转曲文字这类嵌套填充。用单独直方图做 Gate 1 的色板集合比对。 */
+  /* pathItems reach inside groups and compound paths. Top-level pageItems counts miss
+     nested fills such as outlined text. A separate histogram feeds the Gate 1 swatch set comparison. */
   var pathHist = {};
   var pathFilled = 0;
   for (var pp = 0; pp < doc.pathItems.length; pp++) {
@@ -197,7 +197,7 @@ try {
   }
   out.rasters = rasters;
 
-  /* 150 dpi、无压缩 TIFF；Gate 1 用它与 Ghostscript 的源渲染对照 */
+  /* 150 dpi uncompressed TIFF; Gate 1 compares it with the Ghostscript render of the source */
   try {
     var opts = new ExportOptionsTIFF();
     opts.resolution = 150;

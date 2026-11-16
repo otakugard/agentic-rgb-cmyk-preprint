@@ -2,12 +2,12 @@
 
 /*
  * 03-qa.jsx
- * 打开 jobs/<id>/<job-id>.ai，做文档级自检，写 result.json。
- * 不做任何修改，只读；关闭时不保存。
+ * Open jobs/<id>/<job-id>.ai, run document level checks and write result.json.
+ * The run is read-only and closes without saving.
  *
- * 判定分工：
- *   - 这里只负责"Illustrator 侧能看到的事实"（色彩模式、颜色空间、链接、画板、位图显示尺寸）
- *   - 源 PDF 的像素数、ICC 由 04-report.py 读，最后合并成 qa.json
+ * Split of checks:
+ *   - This script reports what Illustrator can see: colour mode, colour space, links, artboard, raster display size
+ *   - 04-report.py reads pixel counts and ICC from the source PDF, then merges them into qa.json
  */
 
 var RESULT_PATH = JOB_DIR + "/result.json";
@@ -64,16 +64,16 @@ try {
 
   var aiPath = JOB_DIR + "/" + ((job.output && job.output.ai) ? job.output.ai : ((job.jobId || "job") + ".ai"));
   var f = new File(aiPath);
-  if (!f.exists) throw new Error("交付文件不存在: " + aiPath);
+  if (!f.exists) throw new Error("deliverable does not exist: " + aiPath);
   out.deliverable = job.output.ai;
   out.deliverableBytes = f.length;
 
-  /* 正常直接打开。若 Illustrator 因为上次崩溃残留状态拒绝该路径，
-     改用 work/ 里的副本做只读检查——QA 本来就不需要原文件可写。 */
+  /* Open directly as normal. If Illustrator refuses the path because of state left by a crash,
+     check a copy in work/ instead. QA never writes to the original. */
   var doc = null;
   var qaCopyPath = null;
   out.warnings = [];
-  /* 不碰用户已打开的同一份文档：app.open 可能直接复用 */
+  /* Leave the user's open document alone: app.open may reuse it */
   var preOpenNames = [];
   for (var pd = 0; pd < app.documents.length; pd++) {
     try { preOpenNames.push(String(app.documents[pd].fullName)); } catch (ePre) {}
@@ -91,12 +91,12 @@ try {
     for (var pn = 0; pn < preOpenNames.length; pn++) {
       if (openedName !== "" && preOpenNames[pn] === openedName) {
         openedDoc = null;
-        throw new Error("交付文件已在你打开的窗口里；请先关闭再跑 QA，避免改动未保存内容");
+        throw new Error("the deliverable is already open in your window; close it before running QA, so unsaved content stays intact");
       }
     }
     doc = openedDoc;
   } else {
-    /* 原路径打不开时用 work/ 副本兜底；这是已知的 Illustrator 路径缓存问题 */
+    /* Fall back to the work/ copy when the original path fails to open. This is a known Illustrator path cache issue. */
     var workDir = new Folder(JOB_DIR + "/work");
     if (!workDir.exists) workDir.create();
     var copyPath = JOB_DIR + "/work/qa-copy.ai";
@@ -105,35 +105,35 @@ try {
     if (!f.copy(copyPath)) throw openError;
     qaCopyPath = copyPath;
     doc = app.open(new File(copyPath));
-    out.warnings.push("原路径无法打开（" + String(openError && openError.message ? openError.message : openError) +
-      "），QA 使用副本 work/qa-copy.ai；交付前请重启 Illustrator 再确认原文件可正常打开");
+    out.warnings.push("original path failed to open (" + String(openError && openError.message ? openError.message : openError) +
+      "). QA uses the copy work/qa-copy.ai. Restart Illustrator and confirm the original opens before delivery.");
   }
-  if (!doc) throw new Error("打开 print.ai 失败");
+  if (!doc) throw new Error("cannot open print.ai");
 
-  /* 色彩模式与文档实际配置文件 */
+  /* Colour mode and the profile the document uses */
   out.docColorSpace = String(doc.documentColorSpace);
   out.isCMYK = doc.documentColorSpace === DocumentColorSpace.CMYK;
   try { out.colorProfileName = String(doc.colorProfileName); } catch (eProf) {}
   try { out.layerCount = doc.layers.length; } catch (eLayer) {}
   try { out.itemCount = doc.pageItems.length; } catch (eItems) {}
 
-  /* 画板：AI 的画板是成品矩形，图稿外扩 3 mm 为出血 */
+  /* Artboard: the .ai artboard is the trim rectangle; artwork extends 3 mm for bleed */
   var art = doc.artboards[0].artboardRect;
   out.artboardMm = { w: r2(pt2mm(art[2] - art[0])), h: r2(pt2mm(art[1] - art[3])) };
   out.artboardCount = doc.artboards.length;
 
-  /* 链接项：必须为 0，否则交付文件会缺图 */
+  /* Links: must be 0. A linked item leaves a missing image in the deliverable. */
   out.linkedItems = doc.placedItems.length;
 
-  /* 文字：当前流程下 Figma 已转曲，这里应为 0 */
+  /* Text: this flow exports Figma text outlined; the count must be 0 */
   out.textFrames = doc.textFrames.length;
   out.fonts = [];
   for (var it = 0; it < doc.textFrames.length; it++) {
     try { out.fonts.push(String(doc.textFrames[it].textRange.characterAttributes.textFont.name)); } catch (e2) {}
   }
 
-  /* 专色（排除 Registration，它是内置的，不算问题）
-     Registration 在 zh_TW 界面叫「[拼版標示色]」，不能靠英文名判断，要用 colorType */
+  /* Spot colours. Registration is built in and stays out of the list.
+     The zh_TW UI shows Registration as the plate registration colour, so compare colorType, not the name. */
   var spots = [];
   for (var s = 0; s < doc.spots.length; s++) {
     var sp = doc.spots[s];
@@ -144,8 +144,8 @@ try {
   }
   out.spotColors = spots;
 
-  /* 颜色空间统计：用 filled/fillColor 而不是 fills 数组
-     实测 fills 对 PDF 导入的图稿恒为空数组，只有 fillColor 才反映真实填充 */
+  /* Colour space counts come from filled/fillColor.
+     In our tests fills stays an empty array for PDF-imported artwork; fillColor carries the real fill. */
   var counts = { rgb: 0, cmyk: 0, spot: 0, gray: 0, other: 0, filled: 0, stroked: 0 };
   out.cmykHistogram = {};
   out.neutralDark = 0;
@@ -207,7 +207,7 @@ try {
   out.scanErrors = scanErrors;
   out.colorUsage = counts;
 
-  /* 位图：显示尺寸 + 内部色彩空间，像素数由 python 侧读 PDF 后合并 */
+  /* Rasters: display size and internal colour space. Python reads pixel counts from the PDF and merges them. */
   var rasters = [];
   for (var ri = 0; ri < doc.rasterItems.length; ri++) {
     var r = doc.rasterItems[ri];
@@ -232,7 +232,7 @@ try {
   }
   out.linkedRasters = linkedRasters;
 
-  /* 溢出检查：所有图稿是否落在画板内 */
+  /* Overflow check: keep all artwork inside the artboard */
   var l = Infinity, t = -Infinity, rr = -Infinity, b = Infinity;
   for (var k = 0; k < items.length; k++) {
     var gb = items[k].geometricBounds;

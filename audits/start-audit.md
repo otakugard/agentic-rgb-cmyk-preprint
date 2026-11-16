@@ -1,4 +1,4 @@
-# Start audit — source subtree (redacted)
+# Start audit: source subtree (redacted)
 
 - Auditor: `codex exec`, model `gpt-6.1-sol`, reasoning `high`, sandbox `read-only`
 - Scope: the private `print-agent/` subtree, before productization

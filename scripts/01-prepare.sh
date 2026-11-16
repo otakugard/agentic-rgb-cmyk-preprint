@@ -1,14 +1,14 @@
 #!/bin/bash
 # 01-prepare.sh <job-id>
 #
-# 把 Figma 导出的 RGB PDF 转成目标 ICC 的 CMYK PDF（ICC 见 config/print-spec.json）。
+# Convert the RGB PDF exported from Figma into a CMYK PDF for the target ICC (ICC in config/print-spec.json).
 #
-# 为什么不用 Illustrator 的「文档色彩模式 → CMYK」：
-#   那条命令用的是当前工作 CMYK 空间，是个环境变量，换台机器、换个人点一下就可能不是 FOGRA39。
-#   Ghostscript + ICC 是显式的：用哪个 profile 写在命令里，结果可复现、可检查。
+# Why not use the Illustrator "Document Color Mode > CMYK" command:
+#   That command uses the current working CMYK space. That space is an environment setting, so another machine or another click can give a space other than FOGRA39.
+#   Ghostscript plus ICC is explicit: the command names the profile, so the result is reproducible and checkable.
 #
-# 输入：jobs/<id>/source/*.pdf（RGB 原件，只读）
-# 输出：jobs/<id>/work/cmyk.pdf + prepare.json + source-audit.json
+# Input: jobs/<id>/source/*.pdf (RGB source artwork, read-only)
+# Output: jobs/<id>/work/cmyk.pdf + prepare.json + source-audit.json
 
 set -uo pipefail
 
@@ -80,7 +80,7 @@ WORK="$JOB/work"
 mkdir -p "$WORK"
 OUT="$WORK/cmyk.pdf"
 
-# 源页数：多页不猜，直接拒绝（一个 nodeId 对应一页，多页说明节点选错了）
+# Source page count: refuse multi-page input, do not guess (one nodeId is one page, so several pages mean the wrong node)
 PAGES=$(python3 -c '
 import re,sys
 raw=open(sys.argv[1],"rb").read()
@@ -90,8 +90,8 @@ if [ "$PAGES" != "1" ]; then
   exit 65
 fi
 
-# 审计源 PDF：提取实际嵌入 ICC 与真实颜色操作，不再靠 /DeviceCMYK 字符串猜。
-# 这一步只读 source/，输出写 work/。
+# Audit the source PDF: extract the embedded ICC and the real colour operators. Do not infer from the /DeviceCMYK string.
+# This step only reads source/ and writes its output to work/.
 AUDIT_JSON="$(
   python3 "$ROOT/scripts/01a-source-audit.py" "$SRC" "$WORK"
 )" || {
@@ -148,9 +148,9 @@ fi
 TARGET_SHA=$(shasum -a 256 "$ICC" | awk '{print $1}')
 GS_VER=$("$GS_BIN" --version 2>/dev/null | head -1)
 
-# Ghostscript 的实际转换参数。OverrideICC=false：保留嵌入源 ICC。
-# RenderIntent=1：Relative Colorimetric；BlackPtComp=1：黑点补偿。
-# 参数是否生效由 06-color-audit 的实测 CMYK 控制色块验证，不只看回显。
+# Actual Ghostscript conversion arguments. OverrideICC=false keeps the embedded source ICC.
+# RenderIntent=1: relative colorimetric. BlackPtComp=1: black point compensation.
+# 06-color-audit verifies these arguments on measured CMYK control patches, not on the echo alone.
 CONVERSION_JSON="$WORK/conversion.json"
 python3 - "$CONVERSION_JSON" "$GS_BIN" "$GS_VER" "$ICC" "$TARGET_SHA" "$SRC_ICC" "$SOURCE_ICC_SHA" "$INTENT" "$BPC" "$IMG_FILTER" <<'PY'
 import json, sys
@@ -204,7 +204,7 @@ LOG="$JOB/run.log"
   echo "== intent=$INTENT bpc=$BPC override=false"
 } >> "$LOG"
 
-# 用 conversion.json 里的同一组参数执行；06 也用这组参数做控制色块。
+# Run with the same argument list from conversion.json. 06 uses that list for the control patches too.
 GS_ARGS=()
 while IFS= read -r line; do GS_ARGS+=("$line"); done < <(python3 -c 'import json,sys;[print(x) for x in json.load(open(sys.argv[1]))["args"]]' "$CONVERSION_JSON")
 "$GS_BIN" "${GS_ARGS[@]}" -o "$OUT" "$CONVERT_SRC" >> "$LOG" 2>&1

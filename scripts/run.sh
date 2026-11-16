@@ -1,9 +1,9 @@
 #!/bin/bash
-# 单次 Illustrator 任务的执行器。
+# Runner for one Illustrator task.
 #   run.sh <job-id> <script.jsx>
 #
-# 只做五件事：校验参数与环境、保证单实例、发一个运行令牌、把 JSX 交给 Illustrator、校验结果归属。
-# 业务逻辑全在 JSX 里，这里不解释结果。
+# It does five things: check arguments and environment, hold a single instance, issue a run token, pass the JSX to Illustrator, verify that the result belongs to this run.
+# The JSX files hold all business logic. This script does not interpret results.
 
 set -uo pipefail
 
@@ -51,7 +51,7 @@ MIN_VERSION="$(spec_get illustrator.minimumVersion)"
 
 APP_PATH="$(ai_app_path "$ROOT")"
 
-# 配置本身坏掉时早失败，别让空值变成奇怪的运行行为
+# Fail early when the config is broken. Do not let an empty value cause odd runtime behaviour.
 if [ -z "$APP_PATH" ] || [ ! -d "$APP_PATH" ]; then
   echo "config error: no Illustrator found; set illustrator.appPath or install Illustrator 2024+" >&2
   exit 78
@@ -65,7 +65,7 @@ if [ -z "$MIN_VERSION" ]; then
   exit 78
 fi
 
-# 单实例锁：Illustrator 只有一个前台文档，并行跑必然互相破坏
+# Single-instance lock: Illustrator has one foreground document, so parallel runs always corrupt each other.
 LOCK="${TMPDIR:-/tmp}/rgb-cmyk-preprint.lock"
 if ! mkdir "$LOCK" 2>/dev/null; then
   echo "another print run is in progress ($LOCK)" >&2
@@ -75,10 +75,10 @@ fi
 
 AS_FILE=""
 cleanup() {
-  # 超时的情况下不释放锁：Illustrator 里的 JSX 可能还在跑，重叠执行比卡住更危险
+  # Keep the lock after a timeout: the JSX may still run in Illustrator, and overlapping runs are worse than a stall.
   if [ -f "$LOCK/timeout" ]; then
-    echo "锁保留在 $LOCK —— 上次运行超时，Illustrator 里可能仍有脚本在跑。" >&2
-    echo "确认 Illustrator 空闲后执行: rm -rf '$LOCK'" >&2
+    echo "lock kept at $LOCK. The last run timed out and a script may still run in Illustrator." >&2
+    echo "after you verify Illustrator is idle, run: rm -rf '$LOCK'" >&2
   else
     rmdir "$LOCK" 2>/dev/null
   fi
@@ -108,7 +108,7 @@ if ! pgrep -f "$APP_PATH/Contents/MacOS" >/dev/null 2>&1; then
   sleep 3
 fi
 
-# 运行令牌：防止读到上一次或别的任务留下的 result.json
+# Run token: prevents reading a result.json left by an earlier run or another job.
 TOKEN="$(python3 -c 'import secrets;print(secrets.token_hex(8))')"
 printf '%s' "$TOKEN" > "$JOB/.run-token"
 
@@ -180,7 +180,7 @@ fi
 
 EXPECTED_SCRIPT="${SCRIPT%.jsx}"
 
-# QA 时给交付物绑定内容哈希；同大小替换会在 04 报告里失效。
+# Bind a content hash to the deliverable during QA. A same-size replacement then fails in the 04 report.
 if [ "$EXPECTED_SCRIPT" = "03-qa" ]; then
   python3 - "$RESULT" "$JOB" <<'PY'
 import hashlib, json, os, sys

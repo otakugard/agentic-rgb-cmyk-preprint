@@ -2,10 +2,10 @@
 
 /*
  * 07b-export-pdf.jsx
- * 从已批准的 <job-id>.ai 导出候选交付 PDF。只做 PDF 导出，不改 .ai。
+ * Export the candidate deliverable PDF from the approved <job-id>.ai. It only exports PDF and does not change the .ai.
  *
- * 参数来源：job.pdfExport（fileName / contract / layout）与 config/print-spec.json。
- * 导出后由 07c-finalize-pdf.py 统一页面框、写 /DefaultCMYK ICC 并做哈希绑定。
+ * Arguments come from job.pdfExport (fileName / contract / layout) and config/print-spec.json.
+ * After export, 07c-finalize-pdf.py sets the page boxes, writes the /DefaultCMYK ICC and binds the hash.
  */
 
 var RESULT_PATH = JOB_DIR + "/result.json";
@@ -80,7 +80,7 @@ try {
   prevInteraction = app.userInteractionLevel;
   app.userInteractionLevel = UserInteractionLevel.DONTDISPLAYALERTS;
 
-  /* 不碰用户已打开的同一份文档 */
+  /* Do not touch a document the user already has open */
   var preOpen = [];
   for (var d = 0; d < app.documents.length; d++) {
     try { preOpen.push(String(app.documents[d].fullName)); } catch (e0) {}
@@ -101,9 +101,9 @@ try {
   }
   result.rulerUnits = String(doc.rulerUnits);
 
-  /* 只导出原 .ai 的 297×210 画板 + 印刷标记。出血由 07c 从
-     work/cmyk-final.pdf 合成；这样标记围绕成品 297×210，不会围绕 303
-     的出血框，也不会因改画板触发 MRAP。 */
+  /* Export only the 297×210 artboard of the original .ai plus the print marks. 07c adds the
+     bleed from work/cmyk-final.pdf, so the marks surround the 297×210 trim, not the 303
+     bleed box, and this avoids the artboard change that would trigger MRAP. */
   result.method = "ai-artboard-marks";
   result.exportArtboardMm = { w: 297, h: 210 };
 
@@ -128,7 +128,7 @@ try {
   o.monochromeDownsampling = 0;
   o.compressArt = true;
 
-  /* 07c 负责绘制日式双线角线与十字线，这里只导出图稿。 */
+  /* 07c draws the Japanese double corner marks and the cross marks. This script exports the artwork only. */
   o.trimMarks = false;
   o.registrationMarks = false;
   o.colorBars = false;
@@ -140,9 +140,9 @@ try {
   o.bleedLink = false;
   o.bleedOffsetRect = [0, 0, 0, 0];
 
-  /* COLORCONVERSIONTODEST / REPURPOSE 在改过画板后都可能 MRAP。
-     图稿已是 FOGRA39 CMYK，导出不做颜色转换；ICC 由 07c 以
-     /DefaultCMYK 写入，数值不变。 */
+  /* COLORCONVERSIONTODEST and REPURPOSE can both trigger MRAP after an artboard change.
+     The artwork is already FOGRA39 CMYK, so export applies no colour conversion. 07c writes the
+     ICC as /DefaultCMYK and the values stay unchanged. */
   o.colorConversionID = ColorConversion.None;
   o.colorDestinationID = ColorDestination.None;
   o.colorProfileID = ColorProfile.None;

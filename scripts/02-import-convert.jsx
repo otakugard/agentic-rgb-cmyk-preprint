@@ -2,21 +2,21 @@
 
 /*
  * 02-import-convert.jsx
- * 把 work/cmyk.pdf（已由 01-prepare.sh 转成 Coated FOGRA39）变成 <job-id>.ai。
+ * Turns work/cmyk.pdf (already converted to Coated FOGRA39 by 01-prepare.sh) into <job-id>.ai.
  *
- * 前置条件：01-prepare.sh 已经跑过。本脚本不再做任何色彩转换——
- * 颜色在 Ghostscript 那一步就定死了，这里只做尺寸与结构。
+ * Precondition: 01-prepare.sh has run. This script does no colour conversion.
+ * Ghostscript fixes the colour. This script handles size and structure only.
  *
- * 路线（实测确定）：
- *   1. app.open(work/cmyk.pdf) 走原生 PDF 导入，得到可编辑的矢量图稿
- *   2. 整体缩放到真实成品尺寸（Figma 1px=1pt，固定 0.75）
- *   3. 对齐画板、存 print.ai
+ * Route (measured):
+ *   1. app.open(work/cmyk.pdf) uses native PDF import and returns editable vector artwork
+ *   2. Scale everything to the real trim size (Figma 1px=1pt, factor 0.75)
+ *   3. Align the artboard and save print.ai
  *
- * 不用「置入 + embed」：实测会把整页变成 1 个 NonNativeItem，颜色停在 RGB。
- * 不用 doc-color-cmyk：它依赖 Illustrator 当前工作 CMYK 空间，不能保证是 FOGRA39。
+ * Place + embed turns the whole page into one NonNativeItem in our tests; the colour stays RGB.
+ * doc-color-cmyk follows the current Illustrator working CMYK space; the result can leave FOGRA39.
  *
- * 输入（run.sh 注入）：JOB_DIR、SPEC_PATH
- * 输出：<JOB_DIR>/<job-id>.ai、<JOB_DIR>/result.json
+ * Input (injected by run.sh): JOB_DIR, SPEC_PATH
+ * Output: <JOB_DIR>/<job-id>.ai, <JOB_DIR>/result.json
  */
 
 var RESULT_PATH = JOB_DIR + "/result.json";
@@ -25,7 +25,7 @@ var result = { ok: false, script: "02-import-convert", jobId: null, warnings: wa
 var doc = null;
 var prevInteraction = null;
 
-/* ---------- 工具 ---------- */
+/* ---------- Helpers ---------- */
 
 function esc(s) {
   s = String(s);
@@ -92,40 +92,40 @@ function unionBounds(collection) {
   return { left: l, top: t, right: r, bottom: b };
 }
 
-/* 输出路径必须留在本任务目录内，且不能落进 source/。
-   先做路径归一化：`./source/x.ai` 这种写法会绕过朴素的前缀判断。 */
+/* The output path stays inside this job directory and outside source/.
+   Normalise the path first: a form like `./source/x.ai` bypasses a naive prefix check. */
 function normalizeRel(rel) {
   var parts = String(rel).split("/");
   var out = [];
   for (var i = 0; i < parts.length; i++) {
     var p = parts[i];
     if (p === "" || p === ".") continue;
-    if (p === "..") throw new Error("output.ai 不能含 ..: " + rel);
+    if (p === "..") throw new Error("output.ai may not contain ..: " + rel);
     out.push(p);
   }
   return out.join("/");
 }
 
 function safeOutput(rel) {
-  if (!rel) throw new Error("job.json 缺少 output.ai");
-  if (String(rel).charAt(0) === "/") throw new Error("output.ai 必须是相对路径: " + rel);
+  if (!rel) throw new Error("job.json has no output.ai");
+  if (String(rel).charAt(0) === "/") throw new Error("output.ai must be a relative path: " + rel);
   var norm = normalizeRel(rel);
-  if (norm.indexOf("source/") === 0) throw new Error("output.ai 不能写进 source/: " + rel);
-  if (norm === "") throw new Error("output.ai 归一化后为空: " + rel);
+  if (norm.indexOf("source/") === 0) throw new Error("output.ai may not go into source/: " + rel);
+  if (norm === "") throw new Error("output.ai is empty after normalisation: " + rel);
   return JOB_DIR + "/" + norm;
 }
 
-/* ---------- 主流程 ---------- */
+/* ---------- Main flow ---------- */
 
 try {
   var spec = readJSON(SPEC_PATH);
   var job = readJSON(JOB_DIR + "/job.json");
   result.jobId = job.jobId || null;
 
-  /* 输出路径要在动 Illustrator 之前校验完 */
+  /* Verify the output path before touching Illustrator */
   var outPath = safeOutput(job.output && job.output.ai);
 
-  /* 成品尺寸：job 里同时给了 preset 和 w/h 时，以 w/h 为准（与 04-report 保持一致） */
+  /* Trim size: when job gives preset and w/h, w/h wins (same as 04-report) */
   var wmm, hmm;
   if (job.trim && job.trim.w && job.trim.h) {
     wmm = job.trim.w; hmm = job.trim.h;
@@ -133,81 +133,81 @@ try {
     var preset = spec.trimPresetsMm[job.trim.preset];
     wmm = preset[0]; hmm = preset[1];
   } else {
-    throw new Error("job.json 的 trim 无法解析（需要 preset 或 w/h）");
+    throw new Error("cannot parse trim in job.json (need preset or w/h)");
   }
 
-  /* 画板含出血：job.bleedMm 优先，否则用 spec.print.bleedMm。
-     源 PDF 的页面 = 成品 + 2×出血；画板只设成品，图稿外扩的部分就是出血。 */
+  /* The artboard carries the bleed: job.bleedMm wins, then spec.print.bleedMm.
+     Source PDF page = trim + 2× bleed. The artboard sets the trim; artwork outside it is bleed. */
   var bleedMm = (job.bleedMm !== undefined && job.bleedMm !== null)
     ? Number(job.bleedMm) : Number(spec.print.bleedMm || 0);
   if (!isFinite(bleedMm) || bleedMm < 0) bleedMm = 0;
   var frameW = wmm + 2 * bleedMm;
   var frameH = hmm + 2 * bleedMm;
 
-  /* 输入：优先 work/cmyk.pdf，缺失就明确报错，不偷偷回退到 RGB 原件 */
+  /* Input: prefer work/cmyk.pdf. A missing file throws; the RGB original stays untouched */
   var prepPath = JOB_DIR + "/prepare.json";
   var inputRel = "work/cmyk.pdf";
-  /* 可选：01-prepare 已把几何缩到成品尺寸时，用它直接导入，避免在
-     Illustrator 里对多面板裁切组再做一次 group/resize。 */
+  /* Optional: when 01-prepare already scaled the geometry to trim size, import that file
+     and skip another group/resize on multi panel clip groups inside Illustrator. */
   if (job.scaleInPdf && new File(JOB_DIR + "/work/cmyk-final.pdf").exists) {
     inputRel = "work/cmyk-final.pdf";
   }
   if (!(new File(JOB_DIR + "/" + inputRel)).exists) {
-    throw new Error("缺少 work/cmyk.pdf —— 先跑 scripts/01-prepare.sh " + (job.jobId || jobId));
+    throw new Error("missing work/cmyk.pdf; run scripts/01-prepare.sh first " + (job.jobId || jobId));
   }
   if (new File(prepPath).exists) {
     var prep = readJSON(prepPath);
     if (prep.deviceRGB && prep.deviceRGB > 0) {
-      warnings.push("prepare 阶段产物仍含 DeviceRGB " + prep.deviceRGB + " 处");
+      warnings.push("prepare output still has DeviceRGB at " + prep.deviceRGB + " places");
     }
   }
 
   prevInteraction = app.userInteractionLevel;
   app.userInteractionLevel = UserInteractionLevel.DONTDISPLAYALERTS;
 
-  /* 记录打开前的文档列表：如果 app.open 复用了用户已经开着的文档，
-     后面我们会解锁、缩放、另存，等于动用户的活。宁可停下。 */
+  /* Record the document list before opening. If app.open reuses a document the user has open,
+     this script would unlock, scale and save it, which changes the user's work. Stop here. */
   var preOpenNames = [];
   for (var di = 0; di < app.documents.length; di++) {
     try { preOpenNames.push(String(app.documents[di].fullName)); } catch (eD) {}
   }
 
   doc = app.open(new File(JOB_DIR + "/" + inputRel));
-  if (!doc) throw new Error("打开 work/cmyk.pdf 失败");
+  if (!doc) throw new Error("cannot open work/cmyk.pdf");
 
   var openedName = "";
   try { openedName = String(doc.fullName); } catch (eN) {}
   for (var pi = 0; pi < preOpenNames.length; pi++) {
     if (openedName !== "" && preOpenNames[pi] === openedName) {
-      doc = null; // 不能关用户自己的文档
-      throw new Error("work/cmyk.pdf 已经在你打开的窗口里。请先关闭它再跑，避免脚本改动未保存的内容。");
+      doc = null; // keep the user's own document open
+      throw new Error("work/cmyk.pdf is already open in your window. Close it before running, so the script leaves unsaved content alone.");
     }
   }
 
   doc.rulerUnits = RulerUnits.Millimeters;
 
   if (doc.documentColorSpace !== DocumentColorSpace.CMYK) {
-    throw new Error("打开后不是 CMYK（当前 " + String(doc.documentColorSpace) +
-      "）。01-prepare 没有正确转换，或 Ghostscript 用了错误的 ICC。");
+    throw new Error("not CMYK after open (current " + String(doc.documentColorSpace) +
+      "). 01-prepare converted the wrong way, or Ghostscript used the wrong ICC.");
   }
 
-  /* 多图层不猜：跨图层重新编组会改变叠放顺序，宁可停下 */
+  /* Multiple layers stop the run: regrouping across layers changes stacking order */
   var usableLayers = [];
   for (var li = 0; li < doc.layers.length; li++) {
     if (doc.layers[li].pageItems.length > 0) usableLayers.push(doc.layers[li]);
   }
   if (usableLayers.length > 1) {
-    throw new Error("源文件有 " + usableLayers.length + " 个图层，本流程只支持单图层。" +
-      "请先在 Illustrator 里合并图层，或改流程（跨层编组会改变叠放顺序）。");
+    throw new Error("source file has " + usableLayers.length + " layers; this flow takes one layer. " +
+      "Merge the layers in Illustrator first, or change the flow (regrouping across layers changes stacking order).");
   }
-  if (usableLayers.length === 0) throw new Error("源 PDF 没有图稿内容");
+  if (usableLayers.length === 0) throw new Error("source PDF has no artwork");
 
   for (var ui = 0; ui < doc.pageItems.length; ui++) {
     try { doc.pageItems[ui].locked = false; } catch (e1) {}
     try { doc.pageItems[ui].hidden = false; } catch (e2) {}
   }
 
-  /* 方向：允许横竖互换，不允许非等比拉伸。比较的是含出血的源页面与目标页面。 */
+  /* Orientation: a 90 degree swap is allowed. Non-uniform scaling stops the run with an error. */
   var ab = doc.artboards[0].artboardRect;
   var srcW = ab[2] - ab[0];
   var srcH = ab[1] - ab[3];
@@ -216,15 +216,15 @@ try {
   var tol = 0.005;
 
   if (closeEnough(srcAspect, targetAspect, tol)) {
-    // 一致
+    // match
   } else if (closeEnough(srcAspect, 1 / targetAspect, tol)) {
     var swap = wmm; wmm = hmm; hmm = swap;
     var swapB = frameW; frameW = frameH; frameH = swapB;
     targetAspect = frameW / frameH;
-    warnings.push("源文件横竖反向，成品尺寸按内容方向取为 " + wmm + "×" + hmm + "mm");
+    warnings.push("source is rotated 90 degrees; trim size follows the content: " + wmm + "×" + hmm + "mm");
   } else {
-    throw new Error("长宽比不匹配：源 " + r2(srcAspect) + "，目标 " + r2(targetAspect) +
-      "（含出血 " + frameW + "×" + frameH + "mm，成品 " + wmm + "×" + hmm + "mm）。不做非等比拉伸。");
+    throw new Error("aspect ratio mismatch: source " + r2(srcAspect) + ", target " + r2(targetAspect) +
+      " (with bleed " + frameW + "×" + frameH + "mm, trim " + wmm + "×" + hmm + "mm). Non-uniform scaling stays off.");
   }
 
   var targetWpt = mm2pt(frameW);
@@ -236,14 +236,14 @@ try {
   var s = factorPct / 100;
 
   if (!alreadyFinal) {
-    /* Figma 1px=1pt 的契约检查：偏离就报警，不静默接受 */
+    /* Contract check for Figma 1px=1pt: any deviation warns */
     var expected = spec.figma.pxToPt * 100;
     if (!closeEnough(factorPct, expected, 0.5)) {
-      warnings.push("缩放系数 " + r2(factorPct) + "% 与 spec.figma.pxToPt(" + expected +
-        "%) 不一致，说明源 PDF 尺寸不符合 Figma 1px=1pt 约定");
+      warnings.push("scale factor " + r2(factorPct) + "% differs from spec.figma.pxToPt(" + expected +
+        "%), so the source PDF size breaks the Figma 1px=1pt contract");
     }
 
-    /* 整层编组后缩放：逐个 resize 会各自绕自身中心，版面会散 */
+    /* Group the whole layer, then scale: a per item resize pivots on each item centre and breaks the layout */
     var snapshot = [];
     for (var si = 0; si < layer.pageItems.length; si++) snapshot.push(layer.pageItems[si]);
 
@@ -252,7 +252,7 @@ try {
     for (var mi = 0; mi < snapshot.length; mi++) {
       snapshot[mi].move(grp, ElementPlacement.PLACEATEND);
     }
-    /* 第 7 个参数是线宽缩放百分比，必须是数值；传 true 会被当成 1% */
+    /* Argument 7 is the stroke width scale percent and needs a number. Passing true reads as 1%. */
     grp.resize(factorPct, factorPct, true, true, true, true, factorPct);
 
     try {
@@ -261,11 +261,11 @@ try {
       app.executeMenuCommand("ungroup");
       doc.selection = null;
     } catch (e4) {
-      warnings.push("缩放后未能解除编组：图稿为单一编组，不影响印刷，只是不便逐项编辑");
+      warnings.push("ungroup after scaling failed; the artwork stays one group. Print is unaffected, per item editing is harder");
     }
 
-    /* resize 围绕的锚点不保证是原点（实测会偏移），按"缩放前的包围盒 × 比例"校正回来。
-       这样保留原有的页边留白，不会把图稿硬贴到画板角上。 */
+    /* The resize pivot is not the origin (it shifts in our tests). Correct with pre-scale bounds × scale.
+       This keeps the page margin and puts no artwork into the artboard corner. */
     s = factorPct / 100;
     var postUnion = unionBounds(doc.pageItems);
     var dx = preUnion.left * s - postUnion.left;
@@ -278,16 +278,16 @@ try {
     }
   }
 
-  /* 画板 = 成品矩形，居中在图稿内；图稿外扩 bleedMm 就是出血。
-     不做包围盒对齐，否则会把原本的页边留白吃掉 */
+  /* Artboard = trim rectangle, centred on the artwork. Artwork beyond bleedMm is bleed.
+     Skip bounding box alignment, which would consume the page margin */
   var bPt = mm2pt(bleedMm);
   var newW = mm2pt(wmm);
   var newH = mm2pt(hmm);
   doc.artboards[0].artboardRect = [bPt, bPt + newH, bPt + newW, bPt];
 
-  /* 注：Illustrator 28.4.1 的 ExtendScript 没有可写的 documentBleed 属性
-     （实测读取即抛错），出血 3 mm 只能在导出前由人工在「文档设置」里填。
-     导出清单已列为必勾项。 */
+  /* Illustrator 28.4.1 ExtendScript has no writable documentBleed property
+     (a read throws in our tests). Enter the 3 mm bleed by hand in Document Setup before export.
+     The export checklist lists it as required. */
 
   var bb = unionBounds(doc.pageItems);
   var overflowMm = {
@@ -302,22 +302,22 @@ try {
                        Math.abs(overflowMm.right), Math.abs(overflowMm.bottom));
   if (bleedMm > 0) {
     if (ovMin < bleedMm - 0.5) {
-      warnings.push("图稿某一侧出血不足：最小 " + r2(ovMin) + "mm，要求 " + bleedMm + "mm");
+      warnings.push("bleed too small on one side: minimum " + r2(ovMin) + "mm, required " + bleedMm + "mm");
     }
     if (ovMax > bleedMm + 0.5) {
-      warnings.push("图稿超出出血边 " + r2(ovMax) + "mm（要求 ≤ " + bleedMm + "mm）");
+      warnings.push("artwork passes the bleed edge by " + r2(ovMax) + "mm (limit ≤ " + bleedMm + "mm)");
     }
   } else if (ovMax > 0.5) {
-    warnings.push("图稿超出画板 " + r2(ovMax) + "mm（当前出血设置为 0）");
+    warnings.push("artwork passes the artboard by " + r2(ovMax) + "mm (bleed set to 0)");
   }
 
   var wMm = r2(pt2mm(bb.right - bb.left));
   var hMm = r2(pt2mm(bb.top - bb.bottom));
   if (!closeEnough(wMm, frameW, 0.5) || !closeEnough(hMm, frameH, 0.5)) {
-    warnings.push("图稿可见范围 " + wMm + "×" + hMm + "mm 与含出血页面 " + frameW + "×" + frameH + "mm 不等");
+    warnings.push("visible artwork " + wMm + "×" + hMm + "mm does not match the page with bleed " + frameW + "×" + frameH + "mm");
   }
 
-  /* 结构统计 */
+  /* Structure counts */
   var filledCmyk = 0, filledRgb = 0, filledOther = 0, filled = 0, stroked = 0, itemTotal = 0;
   var its = doc.pageItems;
   for (var ci = 0; ci < its.length; ci++) {
@@ -334,22 +334,22 @@ try {
     } catch (e3) {}
   }
 
-  /* 直接存到最终路径；先复制旧文件做备份，失败就还原。
-     不用 rename 做备份：ExtendScript 的 File.rename 会改写 File 对象自身，
-     后续 saveAs 会因此算错扩展名（实测产出 .ai.ai）。 */
+  /* Save to the final path. Copy the old file as a backup first and restore it on failure.
+     A rename backup rewrites the File object itself in ExtendScript,
+     so the later saveAs computes the wrong extension (measured output: .ai.ai). */
   var saveOpts = new IllustratorSaveOptions();
   saveOpts.pdfCompatible = true;
-  /* 默认值是 false。不嵌入配置文件的话，这个 .ai 换台机器重新打开时
-     会按对方的 CMYK 工作空间解释，FOGRA39 的数值就失去依据。 */
-  try { saveOpts.embedICCProfile = true; } catch (eICC) { warnings.push("IllustratorSaveOptions 不支持 embedICCProfile，ICC 未嵌入"); }
+  /* The default is false. Without an embedded profile, another machine reads this .ai
+     with its own CMYK working space, and the FOGRA39 values lose their basis. */
+  try { saveOpts.embedICCProfile = true; } catch (eICC) { warnings.push("IllustratorSaveOptions rejects embedICCProfile; ICC not embedded"); }
 
   var backupPath = outPath + ".prev";
   var backup = new File(backupPath);
   var finalFile = new File(outPath);
 
-  /* 上次运行如果死在"备份完成、保存失败"之间，这里会留下 .prev。
-     但它不一定比当前文件新：可能上次其实存成功了、只是没删掉备份。
-     只有备份更新时才回滚，否则删掉陈旧备份，避免把较新的成品退回去。 */
+  /* A run that dies between backup done and save failed leaves a .prev file here.
+     That file can be older than the current deliverable: the last save may have succeeded and only the backup removal failed.
+     Roll back only when the backup is newer. Otherwise delete the stale backup, so a newer deliverable stays. */
   if (backup.exists) {
     var backupTime = 0, currentTime = 0;
     try { backupTime = backup.modified.getTime(); } catch (eB) {}
@@ -357,12 +357,12 @@ try {
     var shouldRestore = !finalFile.exists || backupTime > currentTime;
     if (shouldRestore) {
       if (finalFile.exists && !finalFile.remove()) {
-        throw new Error("发现比成品更新的备份 " + backupPath + "，但无法移除损坏的成品，已停止");
+        throw new Error("backup " + backupPath + " is newer than the deliverable, and the damaged deliverable will not delete; stopped");
       }
       if (!backup.copy(outPath)) {
-        throw new Error("发现比成品更新的备份 " + backupPath + "，但恢复失败，已停止");
+        throw new Error("backup " + backupPath + " is newer than the deliverable, but restore failed; stopped");
       }
-      warnings.push("已从上次遗留的备份恢复 " + outPath + "（备份时间晚于成品）");
+      warnings.push("restored " + outPath + " from a leftover backup (backup newer than the deliverable)");
     }
     backup.remove();
     finalFile = new File(outPath);
@@ -370,7 +370,7 @@ try {
 
   var hadPrevious = finalFile.exists;
   if (hadPrevious && !finalFile.copy(backupPath)) {
-    throw new Error("无法备份已有的 " + outPath + "，为避免覆盖已停止");
+    throw new Error("cannot back up the existing " + outPath + "; stopped to keep it");
   }
 
   try {

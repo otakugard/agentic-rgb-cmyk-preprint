@@ -1,6 +1,6 @@
 #!/bin/bash
-# 一次性环境体检。每次开工前跑一遍，或在 README 的 P0 阶段跑。
-# 只读，不修改任何东西。退出码 0 = 可以开工。
+# One-off environment pre-flight check. Run it once before a job starts.
+# Read-only. It changes nothing. Exit code 0 means you can start the job.
 
 set -uo pipefail
 
@@ -32,7 +32,7 @@ echo "preprint environment check"
 echo "spec: $SPEC"
 echo
 
-# 1. Illustrator（2024/28.0 或更新；空 appPath = 自动选最新安装）
+# 1. Illustrator (2024/28.0 or newer; empty appPath picks the newest install)
 . "$ROOT/scripts/lib/illustrator.sh"
 APP_PATH="$(ai_app_path "$ROOT")"
 MIN_VERSION="$(spec_get illustrator.minimumVersion)"
@@ -59,33 +59,33 @@ else
   bad "icc profile" "not found: $ICC"
 fi
 
-# 3. PDF 预设（人工导出用，缺失不阻塞生产；PDF/X 版本由印厂定义）
+# 3. PDF preset (for manual export; a missing preset does not block production; the print shop defines the PDF/X version)
 PRESET="$(spec_get illustrator.pdfPresetName)"
 if [ -n "$PRESET" ] && [ -f "$ROOT/templates/$PRESET.joboptions" ]; then
   ok "pdf preset" "$PRESET.joboptions"
 else
-  warn "pdf preset" "templates/$PRESET.joboptions 不存在（只影响人工导出，不影响 print.ai）"
+  warn "pdf preset" "templates/$PRESET.joboptions is missing (affects manual export only, not print.ai)"
 fi
 
-# 4. 运行时依赖
+# 4. Runtime dependencies
 for bin in python3 osascript defaults pgrep transicc tificc; do
   command -v "$bin" >/dev/null 2>&1 && ok "runtime" "$bin" || bad "runtime" "missing: $bin"
 done
 
 if python3 -c "import pypdf" >/dev/null 2>&1; then
-  ok "pypdf" "$(python3 -c 'import pypdf;print(pypdf.__version__)')  (Alpha→Luminosity 蒙版改写)"
+  ok "pypdf" "$(python3 -c 'import pypdf;print(pypdf.__version__)')  (Alpha to Luminosity mask rewrite)"
 else
   bad "pypdf" "missing —— python3 -m pip install --user --break-system-packages pypdf"
 fi
 
 GS_BIN="$(spec_get ghostscript.binary)"
 if command -v "$GS_BIN" >/dev/null 2>&1; then
-  ok "ghostscript" "$("$GS_BIN" --version 2>/dev/null | head -1)  (RGB→CMYK 的唯一转换点)"
+  ok "ghostscript" "$("$GS_BIN" --version 2>/dev/null | head -1)  (the only RGB to CMYK conversion point)"
 else
-  bad "ghostscript" "missing: $GS_BIN —— 没有它就无法保证 FOGRA39"
+  bad "ghostscript" "missing: $GS_BIN, FOGRA39 is not guaranteed without it"
 fi
 
-# 5. 写权限
+# 5. Write permissions
 if [ -w "$ROOT/jobs" ]; then
   ok "jobs writable" "$ROOT/jobs"
 else
@@ -94,7 +94,7 @@ fi
 
 echo
 if [ "$FAIL" -gt 0 ]; then
-  echo "RESULT  $FAIL blocking problem(s), $WARN warning(s) — 不能开工"
+  echo "RESULT  $FAIL blocking problem(s), $WARN warning(s), not ready to start"
   exit 1
 fi
 echo "RESULT  ready ($WARN warning(s))"

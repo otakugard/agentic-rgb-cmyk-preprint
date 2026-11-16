@@ -4,8 +4,7 @@ Copy the block below into an agent with shell access. Replace `<path>` with the
 absolute path where the repository should live. The agent installs, verifies,
 and reports. It must not run a production job.
 
-The repository already exists at that path; if it does not, clone it first and
-then run this prompt.
+If the repository is not at that path, clone it first, then run this prompt.
 
 ```text
 Install the repository at <path>/agentic-rgb-cmyk-preprint on this macOS machine.

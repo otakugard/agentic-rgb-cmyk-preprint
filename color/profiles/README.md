@@ -1,6 +1,6 @@
 # ICC profiles
 
-This repository does not ship ICC profiles. Install them locally and point
+You supply the ICC profiles. Install them locally and point
 `config/print-spec.json` → `print.iccProfile` at the file you use.
 
 ## Required
@@ -15,7 +15,7 @@ Where to get it:
    300% variant, not the 330% one.
 2. Adobe apps often ship FOGRA39 profiles under
    `/Library/Application Support/Adobe/Color/Profiles/Recommended/`.
-   `CoatedFOGRA39.icc` is **not** the same profile: it allows TAC 330%.
+   `CoatedFOGRA39.icc` allows TAC 330%. The pipeline target is 300%.
 
 Verify before use:
 
@@ -48,9 +48,9 @@ job notes:
 shasum -a 256 color/profiles/*.icc
 ```
 
-## What not to do
+## Profile rules
 
-- Do not rename `CoatedFOGRA39.icc` to an ISO Coated v2 name. The TAC differs.
-- Do not use a profile you cannot identify by name and source.
-- Do not commit ICC files to a public fork unless you have redistribution
-  rights. Keep them local; `.gitignore` covers this directory.
+- Keep `CoatedFOGRA39.icc` under its own name. The TAC differs.
+- Use a profile whose name and source you can state.
+- Commit ICC files to a public fork only with redistribution rights. Keep them
+  local; `.gitignore` covers this directory.

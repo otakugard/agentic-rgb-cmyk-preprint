@@ -10,8 +10,8 @@ This project is a prepress pipeline. A wrong PASS is worse than a loud FAIL.
   credentials.
 - Keep the single-conversion-point contract: RGB to CMYK happens once, in
   `01-prepare.sh`, with explicit ICC parameters.
-- Every new check needs a negative fixture. If a checker cannot fail, it is not
-  a checker.
+- Every new check needs a negative fixture. Prove the check fails on the fixture
+  before it passes on the good file.
 
 ## Changing a gate
 
@@ -34,8 +34,13 @@ for f in scripts/*.sh scripts/lib/*.sh install/*.sh; do bash -n "$f"; done
 
 The pull request should paste the verify output.
 
+## Docs style
+
+Prose follows [`docs/writing-rules.md`](docs/writing-rules.md): affirmative
+phrasing, short sentences, one owner per repeated rule.
+
 ## Reporting a result
 
 Use the status vocabulary: PASS, FAIL, PENDING, WARN. State the evidence file.
-Do not report ICC-predicted DeltaE00 as a measurement. Do not call a candidate
-PDF a delivery.
+Report ICC-predicted DeltaE00 as a prediction. Call a candidate PDF a candidate;
+delivery needs Gate 3 PASS and the print shop's written approval.

@@ -208,7 +208,7 @@ def analyse(pdf, job, spec, selftest=False):
     rgb_ops = sum(c["count"] for c in colours if c["space"] == "rgb")
     cmyk_ops = sum(c["count"] for c in colours if c["space"] == "cmyk")
 
-    checks.append(check("pdf.exists", "最终 PDF 存在", "pass", os.path.basename(pdf), "存在",
+    checks.append(check("pdf.exists", "Final PDF exists", "pass", os.path.basename(pdf), "exists",
                         "sha256=%s" % info["sha256"][:16]))
 
     # Page boxes
@@ -216,7 +216,7 @@ def analyse(pdf, job, spec, selftest=False):
             ("TrimBox", tw, th), ("BleedBox", tw + 2 * b, th + 2 * b)):
         box = boxes.get(key)
         if not box or len(box) != 4:
-            checks.append(check("pdf.%s" % key.lower(), key, "fail", "缺失",
+            checks.append(check("pdf.%s" % key.lower(), key, "fail", "missing",
                                 "%s x %s mm" % (expected_w, expected_h), ""))
             continue
         wmm = pt2mm(box[2] - box[0])
@@ -226,7 +226,7 @@ def analyse(pdf, job, spec, selftest=False):
                             "pass" if d <= 0.5 else "fail",
                             "%s × %s mm" % (wmm, hmm),
                             "%s × %s mm" % (expected_w, expected_h),
-                            "最大偏差 %.2f mm" % d))
+                            "max deviation %.2f mm" % d))
 
     trim = boxes.get("TrimBox")
     bleed = boxes.get("BleedBox")
@@ -244,8 +244,8 @@ def analyse(pdf, job, spec, selftest=False):
         else:
             pos_ok = abs(trim[0]) <= 0.5 and abs(trim[1]) <= 0.5
             expected = "0, 0 pt"
-            note = "页面框被整体移动时不能只看宽高"
-        checks.append(check("pdf.trimposition", "TrimBox 原点",
+            note = "Width and height alone do not catch a page box that moved as a whole"
+        checks.append(check("pdf.trimposition", "TrimBox origin",
                             "pass" if pos_ok else "fail",
                             [round(trim[0], 2), round(trim[1], 2)], expected, note))
     if trim and bleed and len(trim) == 4 and len(bleed) == 4:
@@ -254,22 +254,22 @@ def analyse(pdf, job, spec, selftest=False):
                       and bleed[1] <= trim[1] - bpt + 0.5
                       and bleed[2] >= trim[2] + bpt - 0.5
                       and bleed[3] >= trim[3] + bpt - 0.5)
-        checks.append(check("pdf.bleedcontain", "BleedBox 包含 TrimBox",
+        checks.append(check("pdf.bleedcontain", "BleedBox contains TrimBox",
                             "pass" if contain_ok else "fail",
-                            {"trim": trim, "bleed": bleed}, "四边各外扩 %.1f mm" % b, ""))
+                            {"trim": trim, "bleed": bleed}, "%.1f mm outside on all four sides" % b, ""))
         media = boxes.get("MediaBox")
         if media and len(media) == 4:
             media_ok = (media[0] <= bleed[0] + 0.5 and media[1] <= bleed[1] + 0.5
                         and media[2] >= bleed[2] - 0.5 and media[3] >= bleed[3] - 0.5)
-            checks.append(check("pdf.mediabox", "MediaBox 包含 BleedBox",
+            checks.append(check("pdf.mediabox", "MediaBox contains BleedBox",
                                 "pass" if media_ok else "fail",
-                                {"media": media, "bleed": bleed}, "MediaBox 覆盖完整出血",
-                                "BleedBox 不能大于实际页面"))
+                                {"media": media, "bleed": bleed}, "MediaBox covers the full bleed",
+                                "BleedBox must not exceed the actual page"))
         bc = bleed_content(pdf, boxes, b)
-        checks.append(check("pdf.bleedcontent", "最终 PDF 出血内容",
+        checks.append(check("pdf.bleedcontent", "Final PDF bleed content",
                             bc.get("status", "pending"), bc,
-                            "四边 3 mm 内无纯白；无出血区域则 PENDING",
-                            "只看页面框不够，必须检查实际油墨"))
+                            "No pure white within 3 mm on all four sides; PENDING when there is no bleed area",
+                            "Page boxes alone are not enough; check the actual ink"))
 
     # Output intent / embedded CMYK profile / PDF/X identification
     contract = (job.get("pdfExport") or {}).get("contract")
@@ -310,7 +310,7 @@ def analyse(pdf, job, spec, selftest=False):
     intent_ok = (len(chain) == 1 and bool(dest_profile)
                  and dest_profile.get("sha256") == target_sha
                  and dest_profile.get("isCMYK") and not dest_profile.get("isRGB"))
-    checks.append(check("pdf.outputintent", "GTS_PDFX OutputIntent + 目标 ICC",
+    checks.append(check("pdf.outputintent", "GTS_PDFX OutputIntent + target ICC",
                         "pass" if (intent_ok and dcm_ok and hdr_ok) else "fail",
                         {"count": len(chain), "condition": cond,
                          "header": headers.strip(),
@@ -318,8 +318,8 @@ def analyse(pdf, job, spec, selftest=False):
                          "iccSha256": target_sha,
                          "profiles": [{k: x.get(k) for k in ("description", "space", "sha256")}
                                       for x in profiles]},
-                        "恰好 1 个 GTS_PDFX；DestOutputProfile = spec 交付 ICC；/DefaultCMYK 同一 ICC",
-                        "ICC 哈希与结构都要对；标签不能冒充转换"))
+                        "Exactly 1 GTS_PDFX; DestOutputProfile = the spec delivery ICC; /DefaultCMYK uses the same ICC",
+                        "Both the ICC hash and the structure must match; a label cannot fake a conversion"))
 
     # PDF/X-4 structural conformance: internal Preflight equivalent over
     # file facts. It does not replace Acrobat Preflight or the printer's own
@@ -370,27 +370,27 @@ def analyse(pdf, job, spec, selftest=False):
                    and subs.get("noPS") and subs.get("noActions")
                    and subs.get("noEncryption") and subs.get("noDeviceRGB"))
         pdfx_status = "pass" if pdfx_ok else "fail"
-    checks.append(check("pdf.pdfx", "PDF/X-4 结构自检", pdfx_status,
+    checks.append(check("pdf.pdfx", "PDF/X-4 structure self-check", pdfx_status,
                         {"required": pdfx_required, "subs": subs},
-                        "Info + XMP 版本标识一致、Trapped、无 /PS、无 Action/JS、无加密、无 RGB",
-                        "内部结构自检；不替代 Acrobat Preflight 与印厂检查"))
+                        "Info and XMP version ids agree, Trapped set, no /PS, no Action/JS, no encryption, no RGB",
+                        "Internal structure self-check; it does not replace Acrobat Preflight or the print shop check"))
 
     # Colour operators in page content
-    checks.append(check("pdf.rgb", "页面内容 RGB 颜色操作",
+    checks.append(check("pdf.rgb", "RGB colour operators in page content",
                         "pass" if rgb_ops == 0 else "fail",
                         rgb_ops, 0,
-                        "CMYK operators=%d; /DeviceRGB 字节计数=%d（可能来自缩略图）" % (
+                        "CMYK operators=%d; /DeviceRGB byte count=%d (may come from a thumbnail)" % (
                             cmyk_ops, st.get("deviceRGB", 0))))
-    checks.append(check("pdf.cmyk", "页面内容 CMYK 颜色操作",
+    checks.append(check("pdf.cmyk", "CMYK colour operators in page content",
                         "pass" if cmyk_ops > 0 else "fail", cmyk_ops, "> 0", ""))
     try:
         from pypdf import PdfReader as _PageReader
         tree_pages = len(_PageReader(pdf).pages)
     except Exception:  # noqa: BLE001
         tree_pages = info.get("pages")
-    checks.append(check("pdf.pages", "页数", "pass" if tree_pages == 1 else "fail",
+    checks.append(check("pdf.pages", "Page count", "pass" if tree_pages == 1 else "fail",
                         {"pageTree": tree_pages, "pageObjects": info.get("pages")}, 1,
-                        "按页面树计数；合并用的孤立页对象不算页"))
+                        "Counted from the page tree; orphan page objects kept for merging do not count"))
 
     # Strict parse: dangling indirect references (e.g. /Resources copied from
     # another writer) are silently tolerated by viewers but must fail here.
@@ -399,13 +399,13 @@ def analyse(pdf, job, spec, selftest=False):
                                  "-dSAFER", "-sDEVICE=nullpage", pdf],
                                 stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
         err_tail = strict.stderr.decode("latin1", "replace").strip().splitlines()[-3:]
-        checks.append(check("pdf.strict", "严格解析（无悬空引用）",
+        checks.append(check("pdf.strict", "Strict parse (no dangling references)",
                             "pass" if strict.returncode == 0 else "fail",
                             {"returncode": strict.returncode, "stderr": err_tail},
-                            0, "Ghostscript -dPDFSTOPONERROR；资源必须可解析"))
+                            0, "Ghostscript -dPDFSTOPONERROR; resources must parse"))
     except Exception as exc:  # noqa: BLE001
-        checks.append(check("pdf.strict", "严格解析（无悬空引用）", "pending",
-                            str(exc), 0, "Ghostscript 不可用"))
+        checks.append(check("pdf.strict", "Strict parse (no dangling references)", "pending",
+                            str(exc), 0, "Ghostscript not available"))
 
     # Structural balance of the page content stream. An unbalanced Q (or a
     # stray EMC) is tolerated by viewers but breaks strict RIPs, so it is a
@@ -419,14 +419,14 @@ def analyse(pdf, job, spec, selftest=False):
         _q, _qc = _n(b"q"), _n(b"Q")
         _bmc, _bdc, _emc = _n(b"BMC"), _n(b"BDC"), _n(b"EMC")
         _balanced = (_q == _qc and _bmc + _bdc == _emc)
-        checks.append(check("pdf.stream", "内容流 q/Q 与标记块平衡",
+        checks.append(check("pdf.stream", "Content stream q/Q and marked block balance",
                             "pass" if _balanced else "fail",
                             {"q": _q, "Q": _qc, "BMC": _bmc, "BDC": _bdc, "EMC": _emc},
-                            "q == Q 且 BMC + BDC == EMC",
-                            "Q 下溢或 EMC 多余会让严格 RIP 报错"))
+                            "q == Q and BMC + BDC == EMC",
+                            "Q underflow or a stray EMC makes a strict RIP fail"))
     except Exception as _exc:
-        checks.append(check("pdf.stream", "内容流 q/Q 与标记块平衡", "pending",
-                            str(_exc), "q == Q 且 BMC + BDC == EMC", "pypdf 不可用"))
+        checks.append(check("pdf.stream", "Content stream q/Q and marked block balance", "pending",
+                            str(_exc), "q == Q and BMC + BDC == EMC", "pypdf not available"))
 
     # Optional content: if the marks stream uses /OC, the catalog must carry a
     # valid /OCProperties whose OCGs are real and on by default.
@@ -442,9 +442,9 @@ def analyse(pdf, job, spec, selftest=False):
         _root = _r.trailer["/Root"]
         _ocp = _root.get("/OCProperties")
         if not _uses_oc:
-            _oc_status, _oc_value = "pass", "未使用可选内容"
+            _oc_status, _oc_value = "pass", "No optional content used"
         elif _ocp is None:
-            _oc_status, _oc_value = "fail", "内容使用 /OC，但 Catalog 缺 OCProperties"
+            _oc_status, _oc_value = "fail", "Content uses /OC but the Catalog has no OCProperties"
         else:
             _ocp = _ocp.get_object()
             _refs = [_x.get_object() for _x in _ocp.get("/OCGs", [])]
@@ -462,12 +462,12 @@ def analyse(pdf, job, spec, selftest=False):
                       and str(_d.get("/BaseState") or "/ON") == "/ON")
             _oc_status = "pass" if _valid else "fail"
             _oc_value = {"ocgs": len(_refs), "on": _on, "bad": _bad}
-        checks.append(check("pdf.ocproperties", "可选内容配置", _oc_status, _oc_value,
-                            "OCProperties 存在；每个 OCG 有 Name 且默认打开",
-                            "/OC 图层缺失配置时部分 RIP 会漏印"))
+        checks.append(check("pdf.ocproperties", "Optional content configuration", _oc_status, _oc_value,
+                            "OCProperties present; every OCG has a Name and is on by default",
+                            "Some RIPs drop output when an /OC layer has no configuration"))
     except Exception as _exc:  # noqa: BLE001
-        checks.append(check("pdf.ocproperties", "可选内容配置", "pending", str(_exc),
-                            "OCProperties 有效", "pypdf 不可用"))
+        checks.append(check("pdf.ocproperties", "Optional content configuration", "pending", str(_exc),
+                            "OCProperties valid", "pypdf not available"))
 
     # ---------- Mark geometry (jp-double) ----------
     try:
@@ -497,30 +497,30 @@ def analyse(pdf, job, spec, selftest=False):
         _exp = sorted(_norm(x) for x in _expected)
         _got = sorted(_norm(((a, b), (c, d))) for a, b, c, d in _found)
         _geom_ok = _exp == _got
-        checks.append(check("pdf.marks.geometry", "日式双线角线 + 中线十字",
+        checks.append(check("pdf.marks.geometry", "Japanese double-line corner marks + centre cross",
                             "pass" if _geom_ok else "fail",
                             {"expected": len(_exp), "found": len(_got),
                              "missing": [s for s in _exp if s not in _got][:6],
                              "extra": [s for s in _got if s not in _exp][:6]},
-                            "与 print-spec marks 的 24 条线段逐条一致",
-                            "偏差超过 0.1 pt 即 FAIL"))
-        checks.append(check("pdf.marks.count", "标记线段数量",
+                            "All 24 segments match the print-spec marks one by one",
+                            "FAIL when the deviation exceeds 0.1 pt"))
+        checks.append(check("pdf.marks.count", "Mark segment count",
                             "pass" if len(_found) == 24 else "fail",
-                            len(_found), 24, "4 角 x 4 条 + 4 个十字 x 2 条"))
+                            len(_found), 24, "4 corners x 4 segments + 4 crosses x 2 segments"))
         _color_ok = (b"/CSAll CS" in _block and b"1 SCN" in _block
                      and b"/CSAll cs" not in _block and b"1 scn" not in _block
                      and not re.search(rb"(?:^|\n)[\d.]+ [\d.]+ [\d.]+ [\d.]+ k", _block)
                      and not re.search(rb"(?:^|\n)[\d.]+ [\d.]+ [\d.]+ rg", _block))
-        checks.append(check("pdf.marks.color", "标记使用套准色",
+        checks.append(check("pdf.marks.color", "Marks use the registration colour",
                             "pass" if _color_ok else "fail",
                             {"separationAll": b"/CSAll CS" in _block,
                              "tint100": b"1 SCN" in _block,
                              "strokingSpace": b"/CSAll cs" not in _block},
-                            "笔画 = /Separation /All 100%",
-                            "K100 只能出一个版，不能做套准；非描边 cs/scn 不算"))
+                            "Stroking = /Separation /All 100%",
+                            "K100 prints on one plate only and cannot register; non-stroking cs/scn does not count"))
         _wm = re.search(rb"([\d.]+) w", _block)
         _width = float(_wm.group(1)) if _wm else None
-        checks.append(check("pdf.marks.width", "标记线宽",
+        checks.append(check("pdf.marks.width", "Mark line width",
                             "pass" if _width is not None and abs(_width - 0.3) <= 0.05 else "fail",
                             _width, "0.3 pt ±0.05", ""))
 
@@ -552,25 +552,25 @@ def analyse(pdf, job, spec, selftest=False):
                 _path = None
             elif _op in (b"n", b"S", b"s"):
                 _path = None
-        checks.append(check("pdf.marks.bars", "TrimBox 外无色彩导表",
+        checks.append(check("pdf.marks.bars", "No colour bar outside the TrimBox",
                             "pass" if not _bars else "fail",
-                            _bars[:6], 0, "标记区只允许线，不允许成块色标"))
+                            _bars[:6], 0, "The mark area allows lines only, not solid colour patches"))
     except Exception as _exc:  # noqa: BLE001
-        checks.append(check("pdf.marks.geometry", "日式双线角线 + 中线十字",
-                            "pending", str(_exc), "可解析", "marks 模块或内容流不可用"))
+        checks.append(check("pdf.marks.geometry", "Japanese double-line corner marks + centre cross",
+                            "pending", str(_exc), "parseable", "marks module or content stream not available"))
 
     # RGB images are not caught by content-stream colour operators.
     images = pdfprobe.image_colours(pdf)
     rgb_images = [x["object"] for x in images if x["kind"] == "rgb"]
-    checks.append(check("pdf.imagesRGB", "页面位图 RGB 残留",
+    checks.append(check("pdf.imagesRGB", "RGB left in page images",
                         "pass" if not rgb_images else "fail",
                         {"rgb": rgb_images[:10], "all": images}, 0,
-                        "内容流 RGB 为 0 不代表位图也是 CMYK"))
+                        "Zero RGB in the content stream does not mean the images are CMYK"))
     unknown_images = [x["object"] for x in images if x["kind"] == "unknown"]
-    checks.append(check("pdf.imagesUnknown", "页面位图色彩空间可解析",
+    checks.append(check("pdf.imagesUnknown", "Page image colour spaces parse",
                         "pending" if unknown_images else "pass",
                         unknown_images[:10], 0,
-                        "资源名 /CS0 等无法解析时必须人工确认"))
+                        "Manual confirmation is required when a resource name such as /CS0 does not parse"))
 
     # Fonts: every non-Type3 font must be embedded (FontFile/FontFile2/FontFile3).
     # Type3 entries with no CharProc painting ops are outline shells, not
@@ -634,30 +634,30 @@ def analyse(pdf, job, spec, selftest=False):
     except Exception as exc:  # noqa: BLE001
         font_status = "pending"
         font_value = str(exc)
-    checks.append(check("pdf.fonts", "字体嵌入", font_status, font_value,
-                        "所有非 Type3 字体均已嵌入；Type3 允许为无绘画壳",
-                        "文字转曲不是硬要求；以嵌入为准"))
+    checks.append(check("pdf.fonts", "Font embedding", font_status, font_value,
+                        "Every non-Type3 font is embedded; Type3 may be a non-painting shell",
+                        "Outlined text is not a hard requirement; embedding is what counts"))
 
     # Separations / overprint
     sep = st.get("separationNames", [])
     if (layout == "marks" and st.get("allSeparation")
             and st.get("deviceN", 0) == 0 and sep and all(x == "All" for x in sep)):
         sep_status = "pass"
-        sep_note = "PDF/X-4 允许 /Separation /All 与 /None；当前仅 /All（套准标记用，TrimBox 外）"
+        sep_note = "PDF/X-4 allows /Separation /All and /None; only /All is present (registration marks, outside the TrimBox)"
     else:
         sep_status = "fail" if (st.get("deviceN", 0) > 0 or st.get("allSeparation")) else (
             "pending" if sep else "pass")
-        sep_note = "具名专色需印厂确认；/All 只允许做标记"
-    checks.append(check("pdf.separations", "专色 / 分色",
+        sep_note = "Named spot colours need print shop confirmation; /All is for marks only"
+    checks.append(check("pdf.separations", "Spot colours / separations",
                         sep_status,
                         {"names": sep, "deviceN": st.get("deviceN", 0),
                          "allSeparation": st.get("allSeparation")},
-                        "图稿无专色；标记 /All 仅允许在外侧",
+                        "No spot colour in the artwork; mark /All is allowed outside only",
                         sep_note))
     over = st.get("overprintTrue", 0) + st.get("opmTrue", 0)
-    checks.append(check("pdf.overprint", "叠印 / 叠印模式",
+    checks.append(check("pdf.overprint", "Overprint / overprint mode",
                         "pending" if over else "pass", over, 0,
-                        "非 0 时必须在 Acrobat 输出预览逐项确认，不能自动判合格"))
+                        "A non-zero count must be confirmed item by item in Acrobat Output Preview; it cannot be accepted automatically"))
 
     # TAC
     vec = info.get("vectorMaxTac") or {}
@@ -681,13 +681,13 @@ def analyse(pdf, job, spec, selftest=False):
         tac_status = "fail"
     else:
         tac_status = "pass"
-    checks.append(check("pdf.tac", "总墨量 TAC", tac_status,
+    checks.append(check("pdf.tac", "Total area coverage (TAC)", tac_status,
                         {"raster150": tac150, "raster300": tac300,
                          "vector": vec, "vectorVisible": tac300.get("vectorVisible"),
                          "limitPercent": limit},
-                        "≤ %s（spec.print.tacLimitPercent）；超限走正确转换或限墨，不截断不取整"
-                        % (limit if limit is not None else "待定"),
-                        "矢量值可捕捉光栅漏掉的小字/细线"))
+                        "≤ %s (spec.print.tacLimitPercent); above the limit use a correct conversion or ink limiting, never clip or round"
+                        % (limit if limit is not None else "TBD"),
+                        "The vector value catches small text and hairlines that the raster misses"))
 
     # Visual comparison with the approved AI
     job_dir = os.path.dirname(pdf)
@@ -696,9 +696,9 @@ def analyse(pdf, job, spec, selftest=False):
     ai = os.path.join(job_dir, job["output"]["ai"])
     ai_sha = None
     if not trim:
-        checks.append(check("pdf.visual", "最终 PDF 与批准 AI 的模拟显示",
-                            "pending", "TrimBox 缺失，无法确定裁切区域",
-                            "TrimBox 存在", ""))
+        checks.append(check("pdf.visual", "Final PDF vs approved AI soft proof",
+                            "pending", "TrimBox missing; cannot determine the crop area",
+                            "TrimBox present", ""))
     elif os.path.exists(ai):
         ai_sha = hashlib.sha256(open(ai, "rb").read()).hexdigest()
         try:
@@ -715,16 +715,16 @@ def analyse(pdf, job, spec, selftest=False):
             visual["status"] = "pass" if (visual["median"] <= 0.5
                                           and visual["over5Percent"] <= 0.05
                                           and not ink_bad and not strong_bad) else "fail"
-            checks.append(check("pdf.visual", "最终 PDF 与批准 AI 的模拟显示",
+            checks.append(check("pdf.visual", "Final PDF vs approved AI soft proof",
                                 visual["status"], visual,
-                                "median ≤ 0.5, over5 ≤ 0.05%, 墨量差 ≤ 0.02%, 实心差块 ≤ 0.0005%",
-                                "软件 ICC 模拟；平色 ΔE 之外另查全图墨量掩膜差异"))
+                                "median ≤ 0.5, over5 ≤ 0.05%, ink difference ≤ 0.02%, solid difference blob ≤ 0.0005%",
+                                "Software ICC simulation; beyond flat-colour ΔE it also checks the whole-image ink mask difference"))
         except Exception as exc:  # noqa: BLE001
-            checks.append(check("pdf.visual", "最终 PDF 与批准 AI 的模拟显示",
-                                "pending", str(exc), "可比较", ""))
+            checks.append(check("pdf.visual", "Final PDF vs approved AI soft proof",
+                                "pending", str(exc), "comparable", ""))
     else:
-        checks.append(check("pdf.visual", "最终 PDF 与批准 AI 的模拟显示",
-                            "pending", "AI 不存在", "AI 存在", ""))
+        checks.append(check("pdf.visual", "Final PDF vs approved AI soft proof",
+                            "pending", "AI not found", "AI present", ""))
 
     # attention is a non-pass result; never let it fall through to PASS.
     fails = [c for c in checks if c["status"] in ("fail", "attention")]
@@ -769,8 +769,8 @@ def main():
             "ok": True, "selftest": selftest, "jobId": job_id,
             "pdf": pdf, "overall": "pending",
             "counts": {"pass": 0, "fail": 0, "pending": 1},
-            "checks": [check("pdf.exists", "最终 PDF 存在", "pending", "缺失",
-                             "人工在 Illustrator 导出后重跑 Gate 3", "")],
+            "checks": [check("pdf.exists", "Final PDF exists", "pending", "missing",
+                             "Export manually from Illustrator, then rerun Gate 3", "")],
             "limits": ["Gate 3 cannot run until the delivery PDF exists."],
         }
         out = "gate3-selftest.json" if selftest else "gate3.json"
