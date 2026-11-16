@@ -14,7 +14,7 @@ handling used by this repository.
 | `item.fills` is always empty | PDF-imported art uses `fillColor` | QA reads `filled` / `fillColor` |
 | A job `.ai` suddenly will not open | Illustrator caches absolute paths | unique job-id filename; rename as a fallback |
 | Shadow bitmaps are about 192 ppi | Figma rasterises shadows small | usually acceptable; report PENDING |
-| Panels disappear after import | `/S /Alpha` clip masks read as black luminosity | set `maskPolicy: "whiten-alpha"`; the mask fill becomes white, the clip stays |
+| Panels disappear after import (measured on 28.4.1) | `/S /Alpha` clip masks read as black luminosity | set `maskPolicy: "whiten-alpha"`; the mask fill becomes white, the clip stays |
 | `.ai` still contains Indexed RGB | it is the `/Thumb` thumbnail | page RGB operators are 0; explain the thumbnail |
 | Embedded ICC is not visible in the `.ai` | PDF part has no `/ICCBased` | do not claim ICC transfer from the `.ai` |
 

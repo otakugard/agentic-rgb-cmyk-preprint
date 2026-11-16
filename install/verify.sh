@@ -29,10 +29,11 @@ for k in sys.argv[2].split("."):
 print(d)' "$SPEC" "$1" 2>/dev/null
 }
 
-AI_APP="$(cfg illustrator.appPath)"
-AI_APP="${AI_APP:-/Applications/Adobe Illustrator 2024/Adobe Illustrator.app}"
-AI_PREFIX="$(cfg illustrator.expectedVersionPrefix)"
-AI_PREFIX="${AI_PREFIX:-28.}"
+AI_MIN="$(cfg illustrator.minimumVersion)"
+AI_MIN="${AI_MIN:-28.0}"
+# shellcheck source=scripts/lib/illustrator.sh
+. "$ROOT/scripts/lib/illustrator.sh"
+AI_APP="$(ai_app_path "$ROOT")"
 GS_BIN="$(cfg ghostscript.binary)"
 GS_BIN="${GS_BIN:-gs}"
 
@@ -58,15 +59,17 @@ fi
 
 section "Illustrator"
 APP="$AI_APP"
-if [ -d "$APP" ]; then
-  AI_VER="$(defaults read "$APP/Contents/Info" CFBundleShortVersionString 2>/dev/null || true)"
-  case "$AI_VER" in
-    "$AI_PREFIX"*) pass "Illustrator $AI_VER (config prefix $AI_PREFIX)" ;;
-    "") fail "Illustrator found but version is unreadable" ;;
-    *) fail "Illustrator $AI_VER; config expects $AI_PREFIX" ;;
-  esac
+if [ -n "$APP" ] && [ -d "$APP" ]; then
+  AI_VER="$(ai_version "$APP")"
+  if [ -z "$AI_VER" ]; then
+    fail "Illustrator found but version is unreadable: $APP"
+  elif ai_version_ge "$AI_VER" "$AI_MIN"; then
+    pass "Illustrator $AI_VER (minimum $AI_MIN) $APP"
+  else
+    fail "Illustrator $AI_VER is older than $AI_MIN: $APP"
+  fi
 else
-  fail "Illustrator not found at $APP (config illustrator.appPath)"
+  fail "Illustrator 2024 (28.0) or newer not found; set illustrator.appPath"
 fi
 
 section "Ghostscript"

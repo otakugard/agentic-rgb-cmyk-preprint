@@ -56,17 +56,34 @@
     "note": "The only RGB-to-CMYK conversion point. Pass the delivery ICC explicitly. Do not rely on Illustrator workspace settings."
   },
   "illustrator": {
-    "appPath": "/Applications/Adobe Illustrator 2024/Adobe Illustrator.app",
+    "appPath": "",
+    "appPathNote": "Empty means: use the newest /Applications/Adobe Illustrator*/Adobe Illustrator.app.",
     "appName": "Adobe Illustrator",
-    "expectedVersionPrefix": "28.",
+    "minimumVersion": "28.0",
+    "minimumVersionReason": "Adobe Illustrator 2024 (28.0) or newer. Newer releases are supported; set appPath to pin one.",
     "pdfPresetName": "PDFX4-FOGRA39",
     "timeoutSeconds": 300
   },
   "trimPresetsMm": {
-    "A3": [297, 420],
-    "A4": [210, 297],
-    "A5": [148, 210],
-    "bizcard": [85, 55],
-    "DL": [99, 210]
+    "A3": [
+      297,
+      420
+    ],
+    "A4": [
+      210,
+      297
+    ],
+    "A5": [
+      148,
+      210
+    ],
+    "bizcard": [
+      85,
+      55
+    ],
+    "DL": [
+      99,
+      210
+    ]
   }
 }

@@ -46,7 +46,7 @@ This pipeline encodes the opposite rules:
 | Component | Version | Needed for |
 |---|---|---|
 | macOS | 13+ | Illustrator automation |
-| Adobe Illustrator | 2024 (28.x) | `.ai` import, QA, geometry |
+| Adobe Illustrator | 2024 (28.0) or newer | `.ai` import, QA, geometry |
 | Python | 3.11+ | audit and gate scripts |
 | Ghostscript | 10.x | the only RGB→CMYK conversion |
 | LittleCMS (`tificc`, `transicc`) | `little-cms2` package | ICC Lab / DeltaE00 prediction |
@@ -57,7 +57,13 @@ This pipeline encodes the opposite rules:
 | Proof profiles | Adobe Coated FOGRA39 + sRGB | soft proof, Gate 3 visual checks |
 
 The Python-only steps run on Linux and Windows. The `.jsx` steps and `run.sh`
-need macOS with Illustrator.
+need macOS with Illustrator 2024 (28.0) or newer. Newer releases are used as
+they are; the version check is a minimum, not an exact match. The failure modes
+in `docs/limitations.md` were measured on 28.4.1.
+
+`config/print-spec.json` → `illustrator.appPath` selects the application. Leave
+it empty and `run.sh` uses the newest `/Applications/Adobe Illustrator*/Adobe
+Illustrator.app`; set it to pin one release.
 
 macOS must allow your terminal (or agent) to control Illustrator:
 System Settings → Privacy & Security → Automation. Without it, every
@@ -135,7 +141,7 @@ Install the repository at <path>/agentic-rgb-cmyk-preprint on this macOS machine
 Read README.md, install/verify.sh, and color/profiles/README.md before you start.
 
 Do:
-1. Check macOS, Adobe Illustrator 2024/28.x, Ghostscript 10.x, LittleCMS
+1. Check macOS, Adobe Illustrator 2024 (28.0) or newer, Ghostscript 10.x, LittleCMS
    (tificc, transicc), Python 3.11+, qpdf, and mupdf. Report versions. Confirm the terminal has Automation
    permission for Illustrator (System Settings → Privacy & Security → Automation).
 2. Install missing Homebrew packages: ghostscript little-cms2 qpdf mupdf-tools python@3.12.

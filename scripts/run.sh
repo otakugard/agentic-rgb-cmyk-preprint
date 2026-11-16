@@ -43,21 +43,25 @@ for k in sys.argv[2].split("."):
 print(d if not isinstance(d,bool) else str(d).lower())' "$SPEC" "$1"
 }
 
-APP_PATH="$(spec_get illustrator.appPath)"
 TIMEOUT="$(spec_get illustrator.timeoutSeconds)"
-VERSION_PREFIX="$(spec_get illustrator.expectedVersionPrefix)"
+MIN_VERSION="$(spec_get illustrator.minimumVersion)"
+
+# shellcheck source=scripts/lib/illustrator.sh
+. "$ROOT/scripts/lib/illustrator.sh"
+
+APP_PATH="$(ai_app_path "$ROOT")"
 
 # 配置本身坏掉时早失败，别让空值变成奇怪的运行行为
 if [ -z "$APP_PATH" ] || [ ! -d "$APP_PATH" ]; then
-  echo "config error: illustrator.appPath invalid ('$APP_PATH')" >&2
+  echo "config error: no Illustrator found; set illustrator.appPath or install Illustrator 2024+" >&2
   exit 78
 fi
 if ! [[ "$TIMEOUT" =~ ^[0-9]+$ ]] || [ "$TIMEOUT" -lt 30 ]; then
   echo "config error: illustrator.timeoutSeconds must be an integer >= 30 (got '$TIMEOUT')" >&2
   exit 78
 fi
-if [ -z "$VERSION_PREFIX" ]; then
-  echo "config error: illustrator.expectedVersionPrefix is empty" >&2
+if [ -z "$MIN_VERSION" ]; then
+  echo "config error: illustrator.minimumVersion is empty" >&2
   exit 78
 fi
 
@@ -84,15 +88,15 @@ trap cleanup EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
-VER=$(defaults read "$APP_PATH/Contents/Info.plist" CFBundleShortVersionString 2>/dev/null)
+VER=$(ai_version "$APP_PATH")
 if [ -z "$VER" ]; then
   echo "cannot read Illustrator version from: $APP_PATH" >&2
   exit 78
 fi
-case "$VER" in
-  ${VERSION_PREFIX}*) ;;
-  *) echo "Illustrator version mismatch: got $VER, expected ${VERSION_PREFIX}x" >&2; exit 78 ;;
-esac
+if ! ai_version_ge "$VER" "$MIN_VERSION"; then
+  echo "Illustrator too old: got $VER, need $MIN_VERSION or newer" >&2
+  exit 78
+fi
 
 if ! pgrep -f "$APP_PATH/Contents/MacOS" >/dev/null 2>&1; then
   echo "launching Illustrator $VER ..."

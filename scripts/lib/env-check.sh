@@ -32,19 +32,23 @@ echo "preprint environment check"
 echo "spec: $SPEC"
 echo
 
-# 1. Illustrator
-APP_PATH="$(spec_get illustrator.appPath)"
-VER_PREFIX="$(spec_get illustrator.expectedVersionPrefix)"
+# 1. Illustrator（2024/28.0 或更新；空 appPath = 自动选最新安装）
+. "$ROOT/scripts/lib/illustrator.sh"
+APP_PATH="$(ai_app_path "$ROOT")"
+MIN_VERSION="$(spec_get illustrator.minimumVersion)"
+MIN_VERSION="${MIN_VERSION:-28.0}"
 
-if [ -d "$APP_PATH" ]; then
-  VER=$(defaults read "$APP_PATH/Contents/Info.plist" CFBundleShortVersionString 2>/dev/null)
-  case "$VER" in
-    ${VER_PREFIX}*) ok "illustrator" "$VER  ($APP_PATH)" ;;
-    "")             bad "illustrator" "cannot read CFBundleShortVersionString" ;;
-    *)              bad "illustrator" "$VER — expected ${VER_PREFIX}x" ;;
-  esac
+if [ -n "$APP_PATH" ] && [ -d "$APP_PATH" ]; then
+  VER=$(ai_version "$APP_PATH")
+  if [ -z "$VER" ]; then
+    bad "illustrator" "cannot read CFBundleShortVersionString: $APP_PATH"
+  elif ai_version_ge "$VER" "$MIN_VERSION"; then
+    ok "illustrator" "$VER  ($APP_PATH)"
+  else
+    bad "illustrator" "$VER — need $MIN_VERSION or newer ($APP_PATH)"
+  fi
 else
-  bad "illustrator" "not found: $APP_PATH"
+  bad "illustrator" "not found; install Illustrator 2024+ or set illustrator.appPath"
 fi
 
 # 2. ICC

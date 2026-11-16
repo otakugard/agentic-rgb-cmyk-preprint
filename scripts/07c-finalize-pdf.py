@@ -209,7 +209,10 @@ def main():
     xmp_date = (now.strftime("%Y-%m-%dT%H:%M:%S")
                 + off[:3] + ":" + off[3:5])
     title = file_name[:-4]
-    producer = "Adobe PDF library 17.00 (07c-finalize-pdf.py)"
+    producer = "07c-finalize-pdf.py (pypdf)"
+    # Do not name an Illustrator version here: this script never runs
+    # Illustrator, and the artwork may come from any supported release.
+    creator = "Adobe Illustrator"
     xmp = ('<?xpacket begin="\ufeff" id="W5M0MpCehiHzreSzNTczkc9d"?>\n'
            '<x:xmpmeta xmlns:x="adobe:ns:meta/">\n'
            ' <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">\n'
@@ -222,7 +225,7 @@ def main():
            '   <dc:format>application/pdf</dc:format>\n'
            '   <dc:title><rdf:Alt><rdf:li xml:lang="x-default">%s</rdf:li></rdf:Alt></dc:title>\n'
            '   <pdf:Producer>%s</pdf:Producer>\n'
-           '   <xmp:CreatorTool>Adobe Illustrator 28.4</xmp:CreatorTool>\n'
+           '   <xmp:CreatorTool>%s</xmp:CreatorTool>\n'
            '   <xmp:CreateDate>%s</xmp:CreateDate>\n'
            '   <xmp:ModifyDate>%s</xmp:ModifyDate>\n'
            '   <pdfx:PDFXStandard>PDF/X</pdfx:PDFXStandard>\n'
@@ -231,7 +234,7 @@ def main():
            '  </rdf:Description>\n'
            ' </rdf:RDF>\n'
            '</x:xmpmeta>\n'
-           '<?xpacket end="w"?>\n' % (title, producer, xmp_date, xmp_date,
+           '<?xpacket end="w"?>\n' % (title, producer, creator, xmp_date, xmp_date,
                                       pdfx_standard, pdfx_standard))
     xmp_stream = DecodedStreamObject()
     xmp_stream.set_data(xmp.encode("utf-8"))
@@ -241,7 +244,7 @@ def main():
 
     writer.add_metadata({
         "/Title": title,
-        "/Creator": "Adobe Illustrator 28.4",
+        "/Creator": creator,
         "/Producer": producer,
         "/GTS_PDFXVersion": pdfx_standard,
         "/Trapped": "/False",

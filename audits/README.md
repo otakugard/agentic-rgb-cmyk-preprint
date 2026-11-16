@@ -56,6 +56,9 @@ pass found real defects; the findings below were fixed before release.
 
 - `verify.sh` hardcoded Illustrator and Ghostscript paths; it now reads
   `config/print-spec.json`.
+- The Illustrator check demanded version `28.x`, which rejected every newer
+  release. It is now a minimum (`>= 28.0`, i.e. 2024 or newer) and the app
+  path is resolved to the newest install unless one is pinned.
 - LittleCMS is a separate `little-cms2` package, not a Ghostscript dependency.
   It is installed, checked, and required.
 - Runtime steps now use the configured Ghostscript binary.

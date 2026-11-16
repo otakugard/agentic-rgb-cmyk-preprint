@@ -12,7 +12,7 @@ Install the repository at <path>/agentic-rgb-cmyk-preprint on this macOS machine
 Read README.md, install/verify.sh, and color/profiles/README.md before you start.
 
 Do:
-1. Check macOS, Adobe Illustrator 2024/28.x, Ghostscript 10.x, LittleCMS
+1. Check macOS, Adobe Illustrator 2024 (28.0) or newer, Ghostscript 10.x, LittleCMS
    (tificc, transicc), Python 3.11+, qpdf, and mupdf. Report versions. Confirm the terminal has Automation
    permission for Illustrator (System Settings → Privacy & Security → Automation).
 2. Install missing Homebrew packages: ghostscript little-cms2 qpdf mupdf-tools python@3.12.
@@ -37,7 +37,7 @@ Report: versions, ICC paths, verify.sh output, selftest result, and any gap.
 
 | Item | Pass condition |
 |---|---|
-| Illustrator | `/Applications/Adobe Illustrator 2024/Adobe Illustrator.app` exists, version starts with `28.` |
+| Illustrator | an `Adobe Illustrator*.app` is found (config `appPath`, else newest in `/Applications`), version `>= 28.0` |
 | Ghostscript | `gs --version` is 10.x |
 | LittleCMS | `tificc` and `transicc` resolve on `PATH` |
 | Python | 3.11 or newer |
@@ -53,6 +53,8 @@ Report: versions, ICC paths, verify.sh output, selftest result, and any gap.
 - Do not fetch ICC files from a random URL. Use a local Adobe/ECI profile or
   ask the user.
 - Do not change `print.iccProfile` to a profile you did not verify by name.
+- Do not lower `illustrator.minimumVersion`. 2024 (28.0) is the floor; a newer
+  release does not need a config change.
 - Do not run `01-prepare.sh` or any job step. Installation stops at verification.
 - Do not modify `scripts/` to turn a FAIL into a PASS.
 
