@@ -1,16 +1,17 @@
 # agentic-rgb-cmyk-preprint
 
-An evidence-first prepress pipeline that turns a Figma RGB export into a CMYK
+An evidence-first prepress pipeline that turns an RGB PDF into a CMYK
 Illustrator file and a PDF/X-4 candidate, with machine-checkable gates.
 
-It is built for one narrow job: **Figma → Illustrator (macOS) → PDF/X-4**, with
-Ghostscript as the only colour conversion point and every change as an explicit
-input.
+It accepts two entries: **an existing sRGB PDF at final size**, or **a Figma
+PDF export**. Both use Ghostscript as the only colour conversion point and
+record every change as an explicit input.
 
 ```
-Figma PDF (sRGB, no OutputIntent)
-  → colour audit + Ghostscript CMYK conversion
-  → Illustrator import, scale, trim artboard, 3 mm bleed
+existing sRGB PDF at final size ─┐
+                                 ├→ colour audit + Ghostscript CMYK conversion
+Figma PDF export (sRGB, 1:0.75) ─┘
+  → Illustrator import, trim artboard, 3 mm bleed
   → colour mapping, three-way proof, preflight
   → PDF/X-4 candidate with trim/bleed boxes and Japanese marks
   → Gate 3 structure check + QA report
@@ -54,9 +55,9 @@ This pipeline encodes the opposite rules:
 | LittleCMS (`tificc`, `transicc`) | `little-cms2` package | ICC Lab / DeltaE00 prediction |
 | pypdf, numpy | see `requirements.txt` | PDF inspection, raster checks |
 | qpdf | 11+ | structural verification (recommended) |
-| MuPDF tools | 1.24+ | visual diff (recommended) |
+| MuPDF tools | 1.24+ | independent render check; missing it leaves the check PENDING |
 | ICC profiles | ISO Coated v2 300% (ECI) + sRGB | colour target |
-| Proof profiles | Adobe Coated FOGRA39 + sRGB | soft proof, Gate 3 visual checks |
+| Proof profiles | sRGB | soft proof, Gate 3 visual checks |
 
 The Python-only steps run on Linux and Windows. The `.jsx` steps and `run.sh`
 need macOS with Illustrator 2024 (28.0) or newer. Newer releases work as they
@@ -109,12 +110,40 @@ source .venv/bin/activate
 config parsing, and tool availability. Add `--full` to also run the negative
 preflight fixture, which writes only its result file.
 
-### First job
+### First job: an existing sRGB PDF
+
+Use this entry when the layout is already final and the PDF is at the real
+physical size. The source page is trim plus bleed: A3 `420 × 297 mm` with
+`3 mm` bleed is `426 × 303 mm`. Do not pre-scale it to the Figma `0.75`
+factor.
+
+```bash
+mkdir -p jobs/2026-01-02-a3-fold-srgb/source
+cp examples/job.srgb-pdf.example.json jobs/2026-01-02-a3-fold-srgb/job.json
+# put the sRGB PDF at jobs/2026-01-02-a3-fold-srgb/source/a3-fold-srgb.pdf
+
+./scripts/01-prepare.sh 2026-01-02-a3-fold-srgb
+./scripts/run.sh 2026-01-02-a3-fold-srgb 01b-rgb-audit.jsx
+./scripts/run.sh 2026-01-02-a3-fold-srgb 02-import-convert.jsx
+./scripts/run.sh 2026-01-02-a3-fold-srgb 03-qa.jsx
+python3 scripts/05-preflight.py 2026-01-02-a3-fold-srgb
+python3 scripts/06-color-audit.py 2026-01-02-a3-fold-srgb
+python3 scripts/07-proof.py 2026-01-02-a3-fold-srgb
+python3 scripts/07c-finalize-pdf.py 2026-01-02-a3-fold-srgb
+python3 scripts/08-gate3.py 2026-01-02-a3-fold-srgb
+python3 scripts/04-report.py 2026-01-02-a3-fold-srgb
+```
+
+### First job: a Figma export
+
+Use this entry when the layout comes from Figma. The source page is the node
+export at Figma's `1 px = 1 pt` size; `01d` scales it by `figma.pxToPt = 0.75`.
+The source page size check expects that factor, not the final millimetre size.
 
 ```bash
 mkdir -p jobs/2026-01-01-example/source
 cp examples/job.example.json jobs/2026-01-01-example/job.json
-# put the Figma PDF export in jobs/2026-01-01-example/source/
+# put the Figma PDF export at jobs/2026-01-01-example/source/0-0.pdf
 
 ./scripts/01-prepare.sh 2026-01-01-example
 ./scripts/run.sh 2026-01-01-example 01b-rgb-audit.jsx
@@ -127,6 +156,10 @@ python3 scripts/07c-finalize-pdf.py 2026-01-01-example
 python3 scripts/08-gate3.py 2026-01-01-example
 python3 scripts/04-report.py 2026-01-01-example
 ```
+
+Both entries end with the same candidate and gate chain. A candidate PDF stays
+a candidate: delivery needs Gate 3 PASS and the print shop's written approval.
+
 
 Run all commands from the repository root. Scripts resolve `config/`,
 `color/`, and `jobs/` relative to the repo root.
@@ -182,9 +215,9 @@ See [`docs/pipeline.md`](docs/pipeline.md) for inputs, outputs, and rerun rules.
 
 | Gate | Question | PASS needs |
 |---|---|---|
-| Gate 1 | Is the source unchanged and correctly interpreted? | source hash, sRGB copy, palette, size, Figma node snapshot |
+| Gate 1 | Is the source unchanged and correctly interpreted? | source hash, sRGB copy, palette, size; Figma node snapshot or direct-PDF source evidence |
 | Gate 2 | Did the conversion preserve the approved artwork? | CMYK tuples, visible proof, bleed, structure |
-| Gate 3 | Is the candidate PDF structurally printable? | OutputIntent, boxes, bleed content, no RGB, fonts, TAC, marks |
+| Gate 3 | Is the candidate PDF structurally printable? | OutputIntent, boxes, bleed content, no RGB, fonts, TAC, marks, ICC chain, stored ink, independent render, optional fold |
 
 Gate 2 PASS covers conversion integrity; approval is the print shop's decision.
 Gate 3 PASS covers output structure; shop acceptance, contract proof, and press

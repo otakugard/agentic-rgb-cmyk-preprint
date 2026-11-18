@@ -11,7 +11,8 @@
   "scaleInPdf": true,
   "source": {
     "pdf": "source/0-0.pdf",
-    "sha256": ""
+    "sha256": "",
+    "kind": "figma"
   },
   "output": {
     "ai": "2026-01-01-example.ai",

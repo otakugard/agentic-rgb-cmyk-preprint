@@ -1,0 +1,33 @@
+{
+  "jobId": "2026-01-02-a3-fold-srgb",
+  "figma": {},
+  "source": {
+    "kind": "srgb-pdf",
+    "pdf": "source/a3-fold-srgb.pdf",
+    "sha256": ""
+  },
+  "trim": {
+    "w": 420,
+    "h": 297
+  },
+  "bleedMm": 3,
+  "scaleInPdf": true,
+  "fold": {
+    "type": "half",
+    "axis": "vertical",
+    "positionMm": 210,
+    "panels": [210, 210]
+  },
+  "output": {
+    "ai": "2026-01-02-a3-fold-srgb.ai",
+    "pdf": "2026-01-02-a3-fold-srgb.pdf"
+  },
+  "pdfxStandard": "PDF/X-4:2010",
+  "tacLimitPercent": 300,
+  "pdfExport": {
+    "fileName": "2026-01-02-a3-fold-srgb.pdf",
+    "contract": "pdfx-4-2010",
+    "layout": "marks",
+    "marginMm": 14
+  }
+}
