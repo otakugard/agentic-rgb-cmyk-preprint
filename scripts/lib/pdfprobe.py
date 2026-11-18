@@ -433,8 +433,11 @@ def output_intents(path):
         d = dm.group(1)
         dest = re.search(rb"/DestOutputProfile\s+(\d+)\s+0\s+R", d)
         cond = re.search(rb"/OutputConditionIdentifier\s*\(([^)]*)\)", d)
-        prof = profile_by_ref(objs, int(dest.group(1))) if dest else None
+        subtype = re.search(rb"/S\s*/([A-Za-z0-9_]+)", d)
+        dest_ref = int(dest.group(1)) if dest else None
+        prof = profile_by_ref(objs, dest_ref) if dest_ref else None
         out.append({
+            "subtype": ("/" + subtype.group(1).decode("latin1")) if subtype else None,
             "condition": cond.group(1).decode("latin1", "replace") if cond else None,
             "destProfile": ({k: prof[k] for k in ("description", "space", "sha256", "isRGB", "isCMYK")}
                             if prof else None),

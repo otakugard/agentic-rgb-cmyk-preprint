@@ -25,6 +25,7 @@ ROOT = os.path.dirname(HERE)
 sys.path.insert(0, os.path.join(HERE, "lib"))
 import pdfprobe  # noqa: E402
 import acceptance  # noqa: E402
+import source  # noqa: E402
 
 
 def load(path, default=None):
@@ -204,14 +205,17 @@ def main():
         if tw:
             b = float(job.get("bleedMm", spec["print"].get("bleedMm", 0)) or 0)
             page = prep.get("pageMm") or [0, 0]
-            exp_w = (tw + 2 * b) / 0.75
-            exp_h = (th + 2 * b) / 0.75
+            factor = 1.0 if source.is_direct_pdf(job) else (1.0 / float(spec.get("figma", {}).get("pxToPt", 0.75)))
+            exp_w = (tw + 2 * b) * factor
+            exp_h = (th + 2 * b) * factor
             ok = (abs(page[0] - exp_w) <= 0.5 and abs(page[1] - exp_h) <= 0.5) or \
                  (abs(page[0] - exp_h) <= 0.5 and abs(page[1] - exp_w) <= 0.5)
             checks.append(check("prep.pageSize", "intermediate page size",
                                 "pass" if ok else "fail", page,
                                 "about %.1f × %.1f mm" % (exp_w, exp_h),
-                                "includes %.1f mm bleed, scaled by 0.75" % b))
+                                "includes %.1f mm bleed; %s" % (
+                                    b, "direct sRGB PDF is 1:1" if source.is_direct_pdf(job)
+                                    else "Figma export uses pxToPt=%.3f" % (1.0 / factor))))
     else:
         checks.append(check("prep.color", "conversion check", "fail", "missing prepare.json", "present", ""))
 
@@ -270,9 +274,11 @@ def main():
                             ov, "%.1f mm on each side (±0.5)" % b,
                             "max deviation %.2f mm" % worst))
         prof = ai_res.get("colorProfileName") or ""
+        icc_name = spec["print"].get("iccName", "")
+        profile_match = bool(prof) and bool(icc_name) and icc_name.upper() in prof.upper()
         checks.append(check("ai.colorProfile", "Illustrator document profile",
-                            "pass" if "FOGRA39" in prof.upper() else "pending",
-                            prof or "not returned by ExtendScript", "Coated FOGRA39",
+                            "pass" if profile_match else "pending",
+                            prof or "not returned by ExtendScript", icc_name,
                             "28.4.1 exposes no reliable read; GUI check required"))
         # CMYK set: cmyk.pdf vs .ai PDF part
         if cmyk_path and ai_path and os.path.exists(cmyk_path) and os.path.exists(ai_path):
@@ -496,7 +502,7 @@ def main():
     if proof:
         s = proof.get("sourceVsCmyk") or {}
         ok = s.get("median", 99) <= 2.0 and s.get("over10Percent", 99) <= 1.0
-        checks.append(check("proof.sourceVsCmyk", "source vs FOGRA39 simulation",
+        checks.append(check("proof.sourceVsCmyk", "source vs delivery ICC simulation",
                             "pass" if ok else "fail",
                             {k: s.get(k) for k in ("median", "p95", "p99", "over10Percent")},
                             "median ≤ 2, over10 ≤ 1%", "ICC simulation, no paper white or physical print"))
@@ -507,7 +513,7 @@ def main():
                             {k: a.get(k) for k in ("median", "p99", "over5Percent", "alignment")},
                             "median ≤ 0.5, over5 ≤ 0.05%", a.get("note", "")))
         checks.append(check("proof.illustrator", "Illustrator Proof Setup",
-                            "pending", "no GUI evidence collected", "Proof Colors + FOGRA39 setting screenshot or readback",
+                            "pending", "no GUI evidence collected", "Proof Colors + %s setting screenshot or readback" % spec["print"].get("iccName"),
                             "the local scripting dictionary has no Proof Setup interface; lcms simulation cannot replace it"))
 
     # ---------- Gate 1 ----------
@@ -582,28 +588,51 @@ def main():
 
     g1.append(check("gate1.sourceHash", "source hash", "pass" if src_ok else "fail",
                     src_hash, expected_src or "matches baseline", ""))
-    fb = load(os.path.join(ROOT, "color", "figma-baseline.json"))
-    ff = load(os.path.join(ROOT, "color", "figma-final.json"))
-    node_id = str((job.get("figma") or {}).get("nodeId") or "")
-    if fb and ff:
-        fb_nodes = fb.get("nodes") or {}
-        ff_nodes = ff.get("nodes") or {}
-        if node_id and node_id in fb_nodes and node_id in ff_nodes:
-            same = fb_nodes.get(node_id) == ff_nodes.get(node_id)
-            g1.append(check("gate1.figma", "Figma node unchanged", "pass" if same else "fail",
-                            {"nodeId": node_id, "before": fb_nodes.get(node_id),
-                             "after": ff_nodes.get(node_id)},
-                            "node metadata hash matches for this job", "read-only MCP snapshot"))
+    if source.is_direct_pdf(job):
+        g1.append(check("gate1.sourceMode", "source mode", "pass",
+                        {"kind": "srgb-pdf", "figmaSnapshot": "not applicable"},
+                        "an existing sRGB PDF at final size",
+                        "source hash, embedded ICC and page geometry carry Gate 1"))
+    else:
+        fb = load(os.path.join(ROOT, "color", "figma-baseline.json"))
+        ff = load(os.path.join(ROOT, "color", "figma-final.json"))
+        node_id = str((job.get("figma") or {}).get("nodeId") or "")
+
+        def node_signature(entry):
+            if not entry:
+                return None
+            method = entry.get("hashMethod") or "legacy"
+            value = entry.get("contentSha256") or entry.get("contentFnv")
+            return (method, value) if value else None
+
+        def find_node(nodes):
+            for key, entry in (nodes or {}).items():
+                if str((entry or {}).get("nodeId")) == node_id:
+                    return key, entry
+            return None, None
+
+        if fb and ff:
+            before_key, before = find_node(fb.get("nodes") or {})
+            after_key, after = find_node(ff.get("nodes") or {})
+            if before and after:
+                bs = node_signature(before)
+                as_ = node_signature(after)
+                same = bs is not None and bs == as_
+                g1.append(check("gate1.figma", "Figma node unchanged", "pass" if same else "fail",
+                                {"nodeId": node_id, "baselineKey": before_key,
+                                 "finalKey": after_key, "before": before, "after": after,
+                                 "hashMethod": bs[0] if bs else None},
+                                "node metadata signature matches for this job",
+                                "read-only MCP snapshot"))
+            else:
+                g1.append(check("gate1.figma", "Figma node unchanged", "pending",
+                                {"nodeId": node_id, "inBaseline": before is not None,
+                                 "inFinal": after is not None},
+                                "this job nodeId is in both snapshots",
+                                "the snapshot does not cover this node; it cannot support PASS"))
         else:
             g1.append(check("gate1.figma", "Figma node unchanged", "pending",
-                            {"nodeId": node_id,
-                             "inBaseline": node_id in fb_nodes,
-                             "inFinal": node_id in ff_nodes},
-                            "this job nodeId is in both snapshots",
-                            "the current snapshot is the old six pages and does not cover this node; it cannot support PASS"))
-    else:
-        g1.append(check("gate1.figma", "Figma node unchanged", "pending",
-                        "snapshot missing", "one metadata snapshot before and after", ""))
+                            "snapshot missing", "one metadata snapshot before and after", ""))
 
     # ---------- Gate 2 ----------
     g2_ids = ("color.rows", "color.controlProbe", "proof.sourceVsCmyk",
@@ -750,11 +779,12 @@ def main():
     _bleedbox_label = ("%s × %s mm" % (tw + 2 * _bleed_mm, th + 2 * _bleed_mm)) if tw else "unresolved"
     checklist = f"""# Candidate PDF acceptance checklist
 
-Candidate PDF generated by `07c-finalize-pdf.py` from `work/cmyk-final.pdf`: `{job.get("output", {}).get("pdf", "")}`. `07b` only exports AI artwork for cross-check. Do not export by hand again; use this checklist for acceptance.
+Candidate PDF generated by `07c-finalize-pdf.py` from `work/cmyk-final.pdf`: `{job.get("output", {}).get("pdf", "")}`. The PDF is the print-shop input. `{job.get("output", {}).get("ai", "")}` is a reference copy for artwork checks; it has no document CMYK profile. Do not export by hand again; use this checklist for acceptance.
 
 Trim: **{_trim_label}**; bleed: **{_bleed_mm} mm**; page boxes: TrimBox {_trim_label} / BleedBox {_bleedbox_label}.
 Document ICC: **{spec["print"].get("iccName")}** (DestOutputProfile = GTS_PDFX OutputIntent); TAC limit: **{spec["print"].get("tacLimitPercent")}%**.
 
+- [ ] Confirm the print-shop input is the PDF; keep the `.ai` as a reference copy.
 - [ ] Confirm PDF page count = 1 and MediaBox includes all Japanese double-line corner marks and the cross mark at the midpoint of each side.
 - [ ] Confirm TrimBox = {tw} × {th} mm and BleedBox extends {spec['print'].get('bleedMm')} mm on each side.
 - [ ] Confirm the marks are Japanese double-line: inner/outer corner register marks + midpoint crosses, 24 line segments, 0.3 pt stroke, no colour bar.
@@ -775,7 +805,7 @@ Document ICC: **{spec["print"].get("iccName")}** (DestOutputProfile = GTS_PDFX O
 
 ## Master file boundary
 
-Figma is the only editable master. The `.ai` and the candidate PDF are outlined production files; outlining text is irreversible.
+For a Figma job, Figma is the editable master. For a direct sRGB PDF job, the source PDF is the master. The `.ai` and the candidate PDF are outlined production files; outlining text is irreversible.
 The agent does not modify `source/`, does not write back to Figma, and does not claim the candidate PDF as the final deliverable.
 """
     with open(os.path.join(job_dir, "checklist.md"), "w", encoding="utf-8") as fh:

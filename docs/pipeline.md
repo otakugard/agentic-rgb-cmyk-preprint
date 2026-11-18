@@ -8,7 +8,7 @@ and `jobs/` from the repo root, not from the current directory.
 ```
 jobs/<job-id>/
   job.json                 parameters for this job
-  source/                  RGB original from Figma (never modified)
+  source/                  RGB original: Figma export or existing sRGB PDF (never modified)
   work/                    intermediates and evidence (git-ignored)
   <job-id>.ai              produced by step 02
   <job-id>-*.pdf           candidate PDF from 07c
@@ -34,7 +34,7 @@ unopenable.
   "trim": { "preset": "A4" },
   "bleedMm": 3,
   "scaleInPdf": true,
-  "source": { "pdf": "source/12-34.pdf", "sha256": "..." },
+  "source": { "kind": "figma", "pdf": "source/12-34.pdf", "sha256": "..." },
   "output": { "ai": "2026-01-01-example.ai", "pdf": "2026-01-01-example.pdf" },
   "pdfxStandard": "PDF/X-4:2010",
   "tacLimitPercent": 300,
@@ -43,7 +43,13 @@ unopenable.
 }
 ```
 
+- `source.kind` is `figma` (default) or `srgb-pdf`. A direct sRGB PDF is at
+  final physical size and runs at `1:1`; a Figma export uses `figma.pxToPt`
+  (`0.75`).
 - `trim` is `{ "preset": "A4" }` or `{ "w": 210, "h": 297 }` in mm.
+- `fold` is optional. Declare `{ "type": "half", "axis": "vertical",
+  "positionMm": 210, "panels": [210, 210] }` for an A3 half fold. Fold
+  parameters enter `acceptanceHash` when present.
 - `scaleInPdf: true` makes `02` import `cmyk-final.pdf`. `01d` always runs and
   always writes `cmyk-final.pdf`; `07c` reads only that file.
 - `pdfExport.fileName` is required by `07c`. `marginMm` defaults to 14.
@@ -65,13 +71,16 @@ DefaultRGBProfile=<source ICC>, OutputICCProfile=<config ICC>
 
 Produces `work/source-audit.json`, `work/source-icc.icc`,
 `work/conversion.json`, `work/cmyk.pdf`, `prepare.json`, and always
-`work/cmyk-final.pdf` plus `work/scale-final.json` from `01d`.
+`work/cmyk-final.pdf` plus `work/scale-final.json` from `01d`. The scale is
+recorded as `1.0` for a direct sRGB PDF and `figma.pxToPt` for a Figma export.
 
 `01a-source-audit.py` pins the first source SHA-256 into `job.json`. A later
 `01` run with a different source hash stops: `source/` is immutable.
 
 Rejects multi-page sources, non-ICC RGB, CMYK input, mixed RGB/CMYK, and a
-non-RGB source ICC.
+non-RGB source ICC. For `source.kind=srgb-pdf`, the embedded RGB profile must
+be sRGB. `01d` also requires the source page to be trim plus bleed at `1:1`;
+a differently sized PDF stops the run instead of being auto-fitted.
 
 ### 01b-rgb-audit.jsx
 
@@ -113,9 +122,10 @@ the nearest CMYK tuple present in `cmyk.pdf`.
 
 ### 07-proof.py
 
-Produces the RGB original, FOGRA39 relative simulation, absolute paper-white
-simulation, and CMYK-vs-AI comparison. Pixel differences locate problems; they
-are not DeltaE00 data.
+Produces the RGB original, delivery-ICC relative simulation, absolute
+paper-white simulation, and CMYK-vs-AI comparison. The page-scale factor comes
+from `source.kind`: `1.0` for a direct PDF, `figma.pxToPt` for a Figma export.
+Pixel differences locate problems; they are not DeltaE00 data.
 
 ### 07c-finalize-pdf.py
 
@@ -132,10 +142,14 @@ driven by AppleScript.
 
 Checks the candidate PDF. Writes `gate3.json` bound to the PDF hash, the AI
 hash, and an acceptance hash over the parameters that produced the result.
+The gate covers the original structure checks plus `/DefaultCMYK`, the ICC
+binding chain, inherited colour spaces, stored ink versus rendered plates, two
+independent renderers, and an optional fold declaration.
 
 `--selftest` runs the same checks against `work/cmyk.pdf` (not a delivery PDF)
 and writes `gate3-selftest.json`. The fixture must FAIL; that proves the checker
-can fail.
+can fail. `scripts/13-rca-selftest.py` adds generated negative fixtures for the
+new checks; it does not read client artwork.
 
 ### 04-report.py
 
@@ -154,6 +168,8 @@ ICC, config, intermediate, AI, and PDF hashes.
 | `.ai` | 03, 07, 08, 04 |
 | `brand-map.json` | 06, 08, 04 |
 | `marks.json` | 07c, 08, 04 |
+| `job.fold` or fold parameters | 08, 04; `acceptanceHash` changes |
+| Figma snapshot files | 04 only; no reconversion |
 
 Skipping a rerun lets a stale gate vouch for a new file. Hash binding reports the
 stale gate when the upstream hash changed.

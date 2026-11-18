@@ -10,10 +10,13 @@ Three gates, three questions. A missing check stays PENDING.
 | RGB working copy is sRGB | embedded ICC description and hash |
 | Palette matches | HEX set from source and copy |
 | Size matches | trim size within 0.2 mm |
-| Figma node unchanged | before/after snapshot of the node |
+| Figma node unchanged | before/after snapshot of the node, matched by `nodeId` value |
+| Direct sRGB PDF source | source hash, embedded sRGB profile, final-size page geometry, RGB copy and visual comparison |
 
-If no Figma snapshot covers the node, the check is PENDING. A snapshot must
-cover this node on this page.
+A Figma job needs a snapshot that covers this node on this page. A direct
+`srgb-pdf` job states `figmaSnapshot: not applicable`; it does not invent a
+node or a snapshot. The source PDF hash, embedded profile and page geometry
+carry Gate 1 for that entry.
 
 ## Gate 2: conversion integrity
 
@@ -44,6 +47,13 @@ report records it as PENDING.
 | Bleed content | rasterised band of actual ink across the full bleed |
 | TAC | raster plus visible vector maximum; registration marks are excluded from the raster crop |
 | Overprint | ExtGState and content-stream usage |
+| `/DefaultCMYK` | one ICCBased array on the page, N=4, delivery ICC; no form override |
+| ICC binding | config, conversion record, DestOutputProfile and `/DefaultCMYK` share one SHA-256 |
+| Inherited colour spaces | page and Form `cs`/`CS` names resolve; CMYK ICC matches; no RGB space |
+| Stored ink | content-stream `k`/`K` and four-component `scn`/`SCN` operands |
+| Managed separations | stored tuples versus rendered plates; removal probe restores a stored tuple |
+| Independent render | Ghostscript and MuPDF agree on the same file inside TrimBox |
+| Fold | optional half-fold line at trim centre and equal panel widths |
 
 When the PDF uses overprint, `pdf.overprint` stays PENDING until the print shop
 confirms the overprint and trapping policy in writing. When no overprint state
@@ -54,6 +64,8 @@ report states an evidence gap instead.
 ## What Gate 3 covers
 
 Gate 3 confirms that the candidate PDF has the structure this pipeline checks.
+Stored ink values, device-space plate readings and rendered appearance are
+separate evidence. A plate reading does not replace the content-stream value.
 
 ## What stays outside Gate 3
 

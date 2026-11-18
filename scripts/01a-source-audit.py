@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """01a-source-audit.py <source.pdf> <work-dir>
 
-Reads the actual Figma PDF, extracts its ICC profile and exact colour
-operators, and classifies the input. It never writes to source/.
+Reads the actual RGB source PDF (Figma export or existing sRGB PDF), extracts
+its ICC profile and exact colour operators, and classifies the input. It never
+writes to source/.
 
 Output: <work-dir>/source-audit.json plus source-icc.icc when present.
 """

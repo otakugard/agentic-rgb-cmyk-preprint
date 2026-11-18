@@ -1,10 +1,11 @@
 #!/bin/bash
 # 01-prepare.sh <job-id>
 #
-# Convert the RGB PDF exported from Figma into a CMYK PDF for the target ICC (ICC in config/print-spec.json).
+# Convert an RGB PDF into a CMYK PDF for the target ICC (ICC in config/print-spec.json).
+# Accepted sources: a Figma PDF export, or an already laid-out sRGB PDF at final size.
 #
 # Why not use the Illustrator "Document Color Mode > CMYK" command:
-#   That command uses the current working CMYK space. That space is an environment setting, so another machine or another click can give a space other than FOGRA39.
+#   That command uses the current working CMYK space. That space is an environment setting, so another machine or another click can give a space other than the target ICC.
 #   Ghostscript plus ICC is explicit: the command names the profile, so the result is reproducible and checkable.
 #
 # Input: jobs/<id>/source/*.pdf (RGB source artwork, read-only)
@@ -24,6 +25,12 @@ fi
 
 JOB="$ROOT/jobs/$JOB_ID"
 [ -d "$JOB" ] || { echo "job dir not found: $JOB" >&2; exit 66; }
+
+SOURCE_MODE=$(python3 -c 'import json,sys;print(str((json.load(open(sys.argv[1])).get("source") or {}).get("kind") or "figma").strip().lower())' "$JOB/job.json")
+case "$SOURCE_MODE" in
+  figma|srgb-pdf) ;;
+  *) echo "job.source.kind must be 'figma' or 'srgb-pdf' (got '$SOURCE_MODE')" >&2; exit 65 ;;
+esac
 
 spec_get() {
   python3 -c 'import json,sys
@@ -80,13 +87,13 @@ WORK="$JOB/work"
 mkdir -p "$WORK"
 OUT="$WORK/cmyk.pdf"
 
-# Source page count: refuse multi-page input, do not guess (one nodeId is one page, so several pages mean the wrong node)
+# Source page count: refuse multi-page input; this pipeline handles one page per job.
 PAGES=$(python3 -c '
 import re,sys
 raw=open(sys.argv[1],"rb").read()
 print(len(re.findall(rb"/Type\s*/Page[^s]", raw)))' "$SRC")
 if [ "$PAGES" != "1" ]; then
-  echo "source pdf has $PAGES page(s); this pipeline handles exactly 1 page per job" >&2
+  echo "source PDF has $PAGES page(s); this pipeline handles exactly one page per job" >&2
   exit 65
 fi
 
@@ -140,9 +147,18 @@ SOURCE_ICC_DESC=$(python3 -c 'import json,sys;print((json.load(open(sys.argv[1])
 SOURCE_KIND=$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1])).get("kind") or "")' "$WORK/source-audit.json")
 
 if [ "$SOURCE_KIND" != "rgb-icc" ] || [ ! -f "$SRC_ICC" ]; then
-  echo "source is '$SOURCE_KIND', not an ICC-tagged RGB Figma export." >&2
+  echo "source is '$SOURCE_KIND', not an ICC-tagged RGB PDF." >&2
   echo "mixed or already-CMYK input is refused by default; audit it first, do not re-separate blindly." >&2
   exit 65
+fi
+
+if [ "$SOURCE_MODE" = "srgb-pdf" ]; then
+  case "$(printf '%s' "$SOURCE_ICC_DESC" | tr '[:upper:]' '[:lower:]')" in
+    *srgb*) ;;
+    *) echo "source.kind=srgb-pdf requires an embedded sRGB profile; found '$SOURCE_ICC_DESC'" >&2
+       echo "Convert the artwork to sRGB and re-export, or start a new job with source.kind=figma." >&2
+       exit 65 ;;
+  esac
 fi
 
 TARGET_SHA=$(shasum -a 256 "$ICC" | awk '{print $1}')
@@ -215,10 +231,10 @@ if [ $RC -ne 0 ] || [ ! -f "$OUT" ]; then
   exit 70
 fi
 
-python3 - "$JOB" "$SRC" "$CONVERT_SRC" "$OUT" "$ICC" "$CONVERSION_JSON" "$WORK/source-audit.json" "$SPEC" "$MASK_JSON" <<'PY'
+python3 - "$JOB" "$SRC" "$CONVERT_SRC" "$OUT" "$ICC" "$CONVERSION_JSON" "$WORK/source-audit.json" "$SPEC" "$MASK_JSON" "$SOURCE_MODE" <<'PY'
 import hashlib, json, os, re, sys
 
-job, src, convert_src, out, icc, conv_path, audit_path, spec_path, mask_path = sys.argv[1:10]
+job, src, convert_src, out, icc, conv_path, audit_path, spec_path, mask_path, source_mode = sys.argv[1:11]
 raw = open(out, "rb").read()
 mb = re.search(rb"/MediaBox\s*\[([^\]]*)\]", raw)
 nums = [float(x) for x in mb.group(1).split()] if mb else []
@@ -249,6 +265,7 @@ payload = {
     "sourceDeviceRGB": audit.get("structure", {}).get("deviceRGB", 0),
     "sourceDeviceCMYK": audit.get("structure", {}).get("deviceCMYK", 0),
     "sourceKind": audit.get("kind"),
+    "sourceMode": source_mode,
     "sourceICC": audit.get("icc"),
     "sourceICCsha256": conv["sourceICCsha256"],
     "conversion": conv,

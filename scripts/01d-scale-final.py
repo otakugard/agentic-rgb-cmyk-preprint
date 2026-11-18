@@ -72,6 +72,7 @@ def main():
     bleed = float(job.get("bleedMm", spec["print"].get("bleedMm", 0)) or 0)
     target_w = wmm + 2 * bleed
     target_h = hmm + 2 * bleed
+    source_mode = str((job.get("source") or {}).get("kind") or "figma").strip().lower()
 
     src = os.path.join(job_dir, "work", "cmyk.pdf")
     dst = os.path.join(job_dir, "work", "cmyk-final.pdf")
@@ -101,6 +102,13 @@ def main():
     sy = target_h_pt / src_h_pt
     if abs(sx - sy) > 0.0002:
         print("non-uniform scale: sx=%.6f sy=%.6f" % (sx, sy), file=sys.stderr)
+        return 65
+    if source_mode == "srgb-pdf" and abs(sx - 1.0) > 0.005:
+        print("source.kind=srgb-pdf expects a final-size PDF at %.1f x %.1f mm; got %.1f x %.1f mm (scale %.4f)"
+              % (target_w, target_h, src_w_pt * 25.4 / 72, src_h_pt * 25.4 / 72, sx),
+              file=sys.stderr)
+        print("Resize the source deliberately in the layout tool and start a new job. The pipeline does not auto-fit an existing PDF.",
+              file=sys.stderr)
         return 65
 
     data = page.get_contents().get_data()
@@ -135,6 +143,7 @@ def main():
         "targetPageMm": [round(target_w, 3), round(target_h, 3)],
         "targetPt": [round(target_w_pt, 4), round(target_h_pt, 4)],
         "scale": round(sx, 8),
+        "sourceMode": source_mode,
         "note": "Geometry-only page CTM; CMYK operators are not re-encoded.",
     }
     with open(report_path, "w", encoding="utf-8") as fh:

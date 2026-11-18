@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """07-proof.py <job-id> [--dpi 150]
 
-Render the RGB source, the FOGRA39 CMYK intermediate and (when present)
+Render the RGB source, the delivery-ICC CMYK intermediate and (when present)
 the Illustrator production file. The CMYK→sRGB conversions are ICC
 simulations made with the same LittleCMS build Ghostscript uses.
 
@@ -21,6 +21,7 @@ ROOT = os.path.dirname(HERE)
 sys.path.insert(0, os.path.join(HERE, "lib"))
 import color  # noqa: E402
 import raster  # noqa: E402
+import source  # noqa: E402
 
 
 def load(path, default=None):
@@ -48,6 +49,7 @@ def main():
         dpi = int(args[args.index("--dpi") + 1])
     job_dir = os.path.join(ROOT, "jobs", job_id)
     job = load(os.path.join(job_dir, "job.json"))
+    spec = load(os.path.join(ROOT, "config", "print-spec.json"))
     prepare = load(os.path.join(job_dir, "prepare.json"))
     if not job or not prepare:
         print("missing job.json or prepare.json", file=sys.stderr)
@@ -63,6 +65,7 @@ def main():
     fogra = prepare["conversion"]["targetICC"]
     srgb = color.SRGB
     bleed = float(job.get("bleedMm", 3) or 0)
+    page_scale = source.page_scale(job, spec)
 
     paths = {
         "sourceTif": os.path.join(outdir, "source-rgb.tif"),
@@ -154,14 +157,14 @@ def main():
     if os.path.exists(ai):
         result["hashes"]["ai"] = hashlib.sha256(open(ai, "rb").read()).hexdigest()
         try:
-            ai_dpi = int(round(dpi / 0.75))
+            ai_dpi = int(round(dpi / page_scale))
             run([gs, "-q", "-dBATCH", "-dNOPAUSE", "-dSAFER", "-sDEVICE=tiff32nc",
                  "-r%d" % ai_dpi, "-o", paths["aiTif"], ai])
             run(["tificc", "-n", "-i" + fogra, "-o" + srgb, "-t1", "-b", "-w8",
                  paths["aiTif"], paths["aiSimTif"]])
             ai_rgb = raster.read_tiff(paths["aiSimTif"])["data"][..., :3]
             raster.write_png(paths["aiPng"], ai_rgb)
-            bleed_px = int(round((bleed / 0.75) / 25.4 * dpi))
+            bleed_px = int(round((bleed / page_scale) / 25.4 * dpi))
             h, w = sim_rgb.shape[:2]
             trimmed = raster.crop(sim_rgb, bleed_px, bleed_px, w - bleed_px, h - bleed_px)
             hh = min(trimmed.shape[0], ai_rgb.shape[0])
@@ -171,7 +174,7 @@ def main():
             raster.write_png(paths["aiSidePng"], raster.side_by_side([trimmed, ai_rgb]))
             result["cmykVsAi"] = raster.compare_aligned(trimmed, ai_rgb, max_shift=2, flat=True, flat_radius=5)
             result["cmykVsAi"]["expected"] = {
-                "aiDpi": ai_dpi, "bleedCropPx": bleed_px,
+                "aiDpi": ai_dpi, "bleedCropPx": bleed_px, "pageScale": page_scale,
                 "aiSize": [ai_rgb.shape[1], ai_rgb.shape[0]],
                 "trimmedCmykSize": [trimmed.shape[1], trimmed.shape[0]],
             }

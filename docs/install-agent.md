@@ -22,6 +22,8 @@ Do:
 5. Run ./install/verify.sh. Paste the output.
 6. Run: source .venv/bin/activate && python3 scripts/09-selftest.py
    Confirm the expected FAIL and report the numbers.
+7. Run: python3 scripts/13-rca-selftest.py
+   Confirm ok=true; it covers the RCA regression gates.
 
 Do not:
 - Modify files under scripts/ to make checks pass.
@@ -42,9 +44,10 @@ Report: versions, ICC paths, verify.sh output, selftest result, and any gap.
 | Python | 3.11 or newer |
 | `pypdf`, `numpy` | import succeeds inside `.venv` |
 | qpdf | `qpdf --version` succeeds |
-| MuPDF | `mutool -v` succeeds (optional) |
+| MuPDF | `mutool -v` succeeds; without it the independent-render check stays PENDING |
 | ICC | `config/print-spec.json` → `print.iccProfile` points to an existing file |
 | Selftest | `scripts/09-selftest.py` reports `ok: true` and detects the 325% TAC fixture |
+| RCA fixtures | `scripts/13-rca-selftest.py` reports `ok: true` |
 
 ## What the agent must not do
 
@@ -69,5 +72,6 @@ pip install -r requirements.txt
 
 ## After install
 
-The first real job needs a Figma PDF export and an Illustrator session. Read
-[`pipeline.md`](pipeline.md) before running one.
+The first real job needs either an existing sRGB PDF at final size or a Figma
+PDF export, plus an Illustrator session. Read [`pipeline.md`](pipeline.md)
+before running one.

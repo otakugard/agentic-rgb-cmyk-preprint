@@ -7,7 +7,7 @@ it checks the facts this pipeline can verify from the file.
 
 --selftest runs the same checks on work/cmyk.pdf (which is not a delivery
 PDF) and writes gate3-selftest.json to prove that missing OutputIntent /
-PDF-X / page boxes are detected.
+PDF-X are detected. Page boxes depend on the source and are not asserted.
 """
 
 import hashlib
@@ -30,6 +30,7 @@ import pdfprobe  # noqa: E402
 import raster  # noqa: E402
 
 GS = shutil.which("gs") or "/opt/homebrew/bin/gs"
+MUTOOL = shutil.which("mutool")
 
 
 _PDFX_CONTRACTS = {
@@ -72,6 +73,10 @@ def pt2mm(v):
     return round(v * 25.4 / 72, 2)
 
 
+def mm2pt(v):
+    return v * 72 / 25.4
+
+
 def trim_mm(job, spec):
     if job.get("trim", {}).get("preset"):
         w, h = spec["trimPresetsMm"][job["trim"]["preset"]]
@@ -82,6 +87,726 @@ def trim_mm(job, spec):
 def check(cid, label, status, value, expected, evidence=""):
     return {"id": cid, "label": label, "status": status,
             "value": value, "expected": expected, "evidence": evidence}
+
+
+def _sha_bytes(data):
+    return hashlib.sha256(data).hexdigest()
+
+
+def _page_resources(page):
+    node = page
+    seen = set()
+    while node is not None and id(node) not in seen:
+        seen.add(id(node))
+        res = node.get("/Resources")
+        if res is not None:
+            return res.get_object()
+        parent = node.get("/Parent")
+        node = parent.get_object() if parent is not None else None
+    return {}
+
+
+def _cs_dict(resources):
+    cs = (resources or {}).get("/ColorSpace")
+    if cs is None:
+        return {}
+    cs = cs.get_object()
+    return {str(k).lstrip("/"): v for k, v in cs.items()}
+
+
+def _stream_data(obj):
+    """Decode a stream object robustly.
+
+    pypdf can return an empty DecodedStreamObject from .get_object() on a
+    /Contents entry while the entry itself still holds the bytes, so try the
+    original object first.
+    """
+    candidates = [obj]
+    if hasattr(obj, "get_object"):
+        try:
+            candidates.append(obj.get_object())
+        except Exception:  # noqa: BLE001
+            pass
+    for cand in candidates:
+        try:
+            data = cand.get_data()
+            if data:
+                return data
+        except Exception:  # noqa: BLE001
+            continue
+    return b""
+
+
+def _page_content_data(page):
+    contents = page.get("/Contents")
+    if contents is None:
+        return b""
+    if isinstance(contents, list) or str(type(contents)).endswith("ArrayObject"):
+        return b"\n".join(_stream_data(x) for x in contents)
+    return _stream_data(contents)
+
+
+def _classify_cs(value):
+    """Classify a colour-space value without assuming a library default."""
+    from pypdf.generic import ArrayObject, NameObject
+    obj = value.get_object() if hasattr(value, "get_object") else value
+    if isinstance(obj, NameObject):
+        name = str(obj)
+        if name in ("/DeviceCMYK",):
+            return {"kind": "cmyk", "source": "DeviceCMYK"}
+        if name in ("/DeviceRGB", "/CalRGB"):
+            return {"kind": "rgb", "source": name.lstrip("/")}
+        if name in ("/DeviceGray", "/CalGray"):
+            return {"kind": "gray", "source": name.lstrip("/")}
+        if name == "/Pattern":
+            return {"kind": "pattern", "source": "Pattern"}
+        return {"kind": "named", "source": name.lstrip("/")}
+    if isinstance(obj, ArrayObject) and len(obj) >= 1:
+        head = str(obj[0])
+        if head == "/ICCBased" and len(obj) >= 2:
+            stream = obj[1].get_object()
+            data = stream.get_data()
+            n = int(stream.get("/N", 0))
+            kind = "cmyk" if n == 4 else "rgb" if n == 3 else "other"
+            return {"kind": kind, "source": "ICCBased", "n": n,
+                    "sha256": _sha_bytes(data),
+                    "description": str(stream.get("/Desc") or "")[:120]}
+        if head == "/Separation" and len(obj) >= 2:
+            return {"kind": "separation", "source": "Separation",
+                    "name": str(obj[1]).lstrip("/")}
+        if head == "/DeviceN":
+            return {"kind": "devicen", "source": "DeviceN"}
+        if head == "/Indexed" and len(obj) >= 2:
+            return {"kind": "indexed", "source": "Indexed",
+                    "base": _classify_cs(obj[1])}
+        if head in ("/CalRGB", "/DeviceRGB"):
+            return {"kind": "rgb", "source": head.lstrip("/")}
+        if head in ("/CalGray", "/DeviceGray"):
+            return {"kind": "gray", "source": head.lstrip("/")}
+    return {"kind": "unknown", "source": str(obj)[:80]}
+
+
+def defaultcmyk_check(pdf, target_sha):
+    """Dedicated /DefaultCMYK regression gate (array form + ICC identity)."""
+    out = {"count": 0, "arrayForm": False, "pageLevel": False,
+           "streamSha256": None, "matchesTarget": False, "n": None,
+           "space": None, "formsWithOwnDefaultCMYK": [],
+           "headerIntent": None}
+    try:
+        from pypdf import PdfReader as _R
+        from pypdf.generic import ArrayObject
+        reader = _R(pdf)
+        page = reader.pages[0]
+        cs = _cs_dict(_page_resources(page))
+        dcm = cs.get("DefaultCMYK")
+        if dcm is not None:
+            out["count"] = 1
+            out["pageLevel"] = True
+            dcm = dcm.get_object()
+            out["arrayForm"] = isinstance(dcm, ArrayObject) and len(dcm) == 2 and str(dcm[0]) == "/ICCBased"
+            if out["arrayForm"]:
+                stream = dcm[1].get_object()
+                data = stream.get_data()
+                out["streamSha256"] = _sha_bytes(data)
+                out["matchesTarget"] = out["streamSha256"] == target_sha
+                out["n"] = int(stream.get("/N", 0))
+                out["space"] = data[16:20].decode("latin1", "replace") if len(data) >= 40 else None
+                out["headerIntent"] = int.from_bytes(data[64:68], "big") if len(data) >= 68 else None
+        # Forms may declare their own DefaultCMYK; that would split the ink space.
+        seen = set()
+
+        def walk(res):
+            xo = (res or {}).get("/XObject")
+            xo = xo.get_object() if hasattr(xo, "get_object") else (xo or {})
+            for name, ref in xo.items():
+                obj = ref.get_object()
+                if id(obj) in seen:
+                    continue
+                seen.add(id(obj))
+                if str(obj.get("/Subtype")) != "/Form":
+                    continue
+                fres = obj.get("/Resources")
+                if fres is not None:
+                    fres = fres.get_object()
+                    if "DefaultCMYK" in _cs_dict(fres):
+                        out["formsWithOwnDefaultCMYK"].append(str(name))
+                    walk(fres)
+        walk(_page_resources(page))
+        out["ok"] = bool(out["count"] == 1 and out["arrayForm"]
+                         and out["matchesTarget"] and out["n"] == 4
+                         and out["space"] == "CMYK"
+                         and not out["formsWithOwnDefaultCMYK"])
+    except Exception as exc:  # noqa: BLE001
+        out["error"] = str(exc)
+        out["ok"] = False
+    return out
+
+
+def inheritedcs_check(pdf, target_sha):
+    """Colour spaces used by page/form content, including forms without /Resources."""
+    out = {"scopes": [], "used": [], "unresolved": [], "rgbSpaces": [],
+           "wrongIcc": [], "spotNames": [], "inheritedForms": 0,
+           "deviceCMYKInInheritedForms": 0, "pageDefaultCMYK": False,
+           "error": None}
+    try:
+        from pypdf import PdfReader as _R
+        reader = _R(pdf)
+        page = reader.pages[0]
+        page_res = _page_resources(page)
+        out["pageDefaultCMYK"] = "DefaultCMYK" in _cs_dict(page_res)
+        scopes = []
+        seen = set()
+
+        def add_scope(label, resources, inherited, content, has_own_resources):
+            scopes.append({"scope": label, "resources": resources,
+                           "inherited": inherited,
+                           "hasOwnResources": has_own_resources,
+                           "content": content})
+
+        def walk(resources, label, inherited):
+            xo = (resources or {}).get("/XObject")
+            xo = xo.get_object() if hasattr(xo, "get_object") else (xo or {})
+            for name, ref in xo.items():
+                obj = ref.get_object()
+                if id(obj) in seen:
+                    continue
+                seen.add(id(obj))
+                if str(obj.get("/Subtype")) != "/Form":
+                    continue
+                has_res = "/Resources" in obj
+                fres = obj["/Resources"].get_object() if has_res else resources
+                local_cs = _cs_dict(fres)
+                # An empty /Resources dict has no usable local colour space:
+                # its DeviceCMYK numbers are read in the page/device space.
+                relies_on_page = inherited or (not has_res) or (not local_cs)
+                try:
+                    content = obj.get_data()
+                except Exception:  # noqa: BLE001
+                    content = b""
+                add_scope("%s/%s" % (label, name), fres, relies_on_page,
+                          content, has_res)
+                walk(fres, "%s/%s" % (label, name), relies_on_page)
+
+        try:
+            page_content = _page_content_data(page)
+        except Exception:  # noqa: BLE001
+            page_content = b""
+        add_scope("page", page_res, False, page_content, True)
+        walk(page_res, "page", False)
+
+        import re as _re
+        use_rx = _re.compile(rb"/([A-Za-z0-9#_.+-]+)\s+(?:cs|CS)\b")
+        k_rx = _re.compile(rb"(-?(?:\d+(?:\.\d*)?|\.\d+))\s+(-?(?:\d+(?:\.\d*)?|\.\d+))"
+                           rb"\s+(-?(?:\d+(?:\.\d*)?|\.\d+))\s+(-?(?:\d+(?:\.\d*)?|\.\d+))\s+[kK]\b")
+        for s in scopes:
+            entries = _cs_dict(s["resources"])
+            declared = {}
+            for name, value in entries.items():
+                if name == "DefaultCMYK":
+                    continue
+                declared[name] = _classify_cs(value)
+            used_names = sorted({m.group(1).decode("latin1") for m in use_rx.finditer(s["content"])})
+            k_ops = len(k_rx.findall(s["content"]))
+            scope_used = []
+            for name in used_names:
+                if name not in declared:
+                    out["unresolved"].append({"scope": s["scope"], "name": name})
+                    continue
+                info = declared[name]
+                scope_used.append({"scope": s["scope"], "name": name,
+                                   "kind": info.get("kind"),
+                                   "sha256": info.get("sha256"),
+                                   "matchesTarget": (info.get("sha256") == target_sha)
+                                   if info.get("sha256") else None})
+                if info.get("kind") == "rgb":
+                    out["rgbSpaces"].append({"scope": s["scope"], "name": name,
+                                             "source": info.get("source")})
+                elif info.get("kind") == "cmyk" and info.get("sha256") \
+                        and info.get("sha256") != target_sha:
+                    out["wrongIcc"].append({"scope": s["scope"], "name": name,
+                                            "sha256": info.get("sha256")})
+                elif info.get("kind") == "separation":
+                    if info.get("name") != "All":
+                        out["spotNames"].append({"scope": s["scope"], "name": name,
+                                                 "separation": info.get("name")})
+            out["used"].extend(scope_used)
+            if s["inherited"] and k_ops:
+                out["inheritedForms"] += 1
+                out["deviceCMYKInInheritedForms"] += k_ops
+            out["scopes"].append({
+                "scope": s["scope"], "inherited": s["inherited"],
+                "hasOwnResources": s["hasOwnResources"],
+                "kOperators": k_ops,
+                "declared": {k: v.get("kind") for k, v in declared.items()},
+                "used": [u["name"] for u in scope_used],
+            })
+        out["ok"] = not (out["unresolved"] or out["rgbSpaces"] or out["wrongIcc"])
+        out["deviceCMYKSource"] = (
+            "page /DefaultCMYK" if out["deviceCMYKInInheritedForms"]
+            and out["pageDefaultCMYK"] else
+            "device-dependent (no /DefaultCMYK)" if out["deviceCMYKInInheritedForms"]
+            else "no inherited DeviceCMYK")
+    except Exception as exc:  # noqa: BLE001
+        out["error"] = str(exc)
+        out["ok"] = False
+    if out["error"]:
+        out["status"] = "pending"
+    elif out["unresolved"] or out["rgbSpaces"] or out["wrongIcc"]:
+        out["status"] = "fail"
+    elif out["deviceCMYKInInheritedForms"] and not out["pageDefaultCMYK"]:
+        out["status"] = "fail"
+    elif out["spotNames"]:
+        out["status"] = "pending"
+    else:
+        out["status"] = "pass"
+    return out
+
+
+def stored_ink_check(pdf):
+    """Stored CMYK numbers in reachable page/Form content: authoritative file ink."""
+    try:
+        from pypdf import PdfReader as _R
+        import re as _re
+        reader = _R(pdf)
+        page = reader.pages[0]
+        num = rb"(-?(?:\d+(?:\.\d*)?|\.\d+))"
+        k_rx = _re.compile(num + rb"\s+" + num + rb"\s+" + num + rb"\s+" + num + rb"\s+(k|K)\b")
+        scn_rx = _re.compile(num + rb"\s+" + num + rb"\s+" + num + rb"\s+" + num + rb"\s+(scn|SCN)\b")
+        rgb_rx = _re.compile(num + rb"\s+" + num + rb"\s+" + num + rb"\s+(rg|RG)\b")
+        counts = {"page": 0, "forms": 0}
+        cmyk = {}
+        rgb = 0
+
+        def scan(data, scope):
+            nonlocal rgb
+            for rx in (k_rx, scn_rx):
+                for m in rx.finditer(data):
+                    vals = tuple(round(float(m.group(i)) * 100.0, 2) for i in range(1, 5))
+                    counts[scope] += 1
+                    cmyk[vals] = cmyk.get(vals, 0) + 1
+            rgb += len(rgb_rx.findall(data))
+
+        page_res = _page_resources(page)
+        page_data = _page_content_data(page)
+        scan(page_data, "page")
+        seen = set()
+
+        def walk(res):
+            xo = (res or {}).get("/XObject")
+            xo = xo.get_object() if hasattr(xo, "get_object") else (xo or {})
+            for _, ref in xo.items():
+                obj = ref.get_object()
+                if id(obj) in seen:
+                    continue
+                seen.add(id(obj))
+                if str(obj.get("/Subtype")) != "/Form":
+                    continue
+                try:
+                    data = obj.get_data()
+                except Exception:  # noqa: BLE001
+                    data = b""
+                scan(data, "forms")
+                fres = obj.get("/Resources")
+                walk(fres.get_object() if fres is not None else res)
+
+        walk(page_res)
+        total = counts["page"] + counts["forms"]
+        dominant = max(cmyk.items(), key=lambda kv: kv[1]) if cmyk else (None, 0)
+        tuples = [{"cmyk": list(k), "count": v} for k, v in
+                  sorted(cmyk.items(), key=lambda kv: -kv[1])[:12]]
+        return {
+            "status": "pass" if total else "pending",
+            "operators": counts,
+            "cmykOperators": total,
+            "rgbOperators": rgb,
+            "distinctTuples": len(cmyk),
+            "tuples": tuples,
+            "dominant": list(dominant[0]) if dominant[0] else None,
+            "dominantCount": dominant[1],
+            "dominantTacPercent": round(sum(dominant[0]), 2) if dominant[0] else None,
+            "authoritative": "content-stream operands are the ink the file specifies",
+            "note": "Renderer plate values are a device-space reading, not file values. "
+                    "Only page-reachable content is scanned.",
+        }
+    except Exception as exc:  # noqa: BLE001
+        return {"status": "pending", "error": str(exc)}
+
+
+def _render_sep_plates(pdf, dpi, tmp, media_box=None, crop_box=None):
+    out = os.path.join(tmp, "sep.tif")
+    subprocess.run([GS, "-q", "-dBATCH", "-dNOPAUSE", "-dSAFER",
+                    "-sDEVICE=tiffsep", "-r%d" % dpi, "-sCompression=none",
+                    "-dTextAlphaBits=1", "-dGraphicsAlphaBits=1",
+                    "-o", out, pdf], check=True,
+                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    names = {}
+    for fn in os.listdir(tmp):
+        if not fn.startswith("sep(") or not fn.endswith(").tif"):
+            continue
+        plate = fn[4:-5]
+        names[plate] = os.path.join(tmp, fn)
+    order = ["Cyan", "Magenta", "Yellow", "Black"]
+    if not all(x in names for x in order):
+        raise RuntimeError("missing separation plates: %s" % sorted(names))
+    plates = [raster.read_tiff(names[x])["data"] for x in order]
+    arr = np.stack(plates, axis=-1).astype(np.int16)
+    if crop_box and media_box and len(crop_box) == 4 and len(media_box) == 4:
+        sc = dpi / 72.0
+        x0 = max(0, int(round((crop_box[0] - media_box[0]) * sc)))
+        x1 = min(arr.shape[1], int(round((crop_box[2] - media_box[0]) * sc)))
+        y0 = max(0, int(round((media_box[3] - crop_box[3]) * sc)))
+        y1 = min(arr.shape[0], int(round((media_box[3] - crop_box[1]) * sc)))
+        arr = arr[y0:y1, x0:x1]
+    return arr
+
+
+def _dominant_plate_ink(arr):
+    h, w, _ = arr.shape
+    step = max(1, min(h, w) // 500)
+    sample = arr[::step, ::step].reshape(-1, 4)
+    from collections import Counter
+    counts = Counter(map(tuple, sample.tolist()))
+    top, n = counts.most_common(1)[0]
+    return {
+        "plateBytes": list(top),
+        "inkPercent": [round((255 - v) / 2.55, 2) for v in top],
+        "coverage": round(n / float(len(sample)), 4),
+        "sampledPixels": int(len(sample)),
+    }
+
+
+def _classify_managed(stored_tuples, plate, probe, declared_ok, has_declaration=False):
+    """Pure classifier so negative fixtures can exercise it without a renderer.
+
+    stored_tuples: distinct CMYK percent tuples in the content streams.
+    plate/probe: dominant CMYK percent tuples read from tiffsep, or None.
+    declared_ok: the page /DefaultCMYK is present and is the delivery ICC.
+    has_declaration: any /DefaultCMYK exists (even if it is the wrong ICC).
+    """
+    def nearest(value):
+        if value is None or not stored_tuples:
+            return None, None
+        best = min(stored_tuples,
+                   key=lambda t: max(abs(x - y) for x, y in zip(value, t)))
+        return best, round(max(abs(x - y) for x, y in zip(value, best)), 3)
+
+    plate_match, d_sp = nearest(plate)
+    probe_match, d_pr = nearest(probe) if probe is not None else (None, None)
+    flip = d_sp is not None and d_sp > 1.0
+    if has_declaration and not declared_ok:
+        return {"status": "fail", "mechanism": "declaration_is_not_the_delivery_icc",
+                "plateMatchesStored": list(plate_match) if plate_match else None,
+                "storedVsPlateMaxDiff": d_sp}
+    if not declared_ok:
+        if d_sp is not None and d_sp <= 1.0:
+            return {"status": "pass", "mechanism": "no_declaration_device_passthrough",
+                    "plateMatchesStored": list(plate_match) if plate_match else None,
+                    "storedVsPlateMaxDiff": d_sp}
+        return {"status": "fail", "mechanism": "unexplained_renderer_divergence",
+                "plateMatchesStored": list(plate_match) if plate_match else None,
+                "storedVsPlateMaxDiff": d_sp}
+    if flip:
+        if d_pr is not None and d_pr <= 1.0 and probe != plate:
+            return {"status": "pass", "mechanism": "defaultcmyk_reseparation_confirmed_by_removal_probe",
+                    "plateMatchesStored": list(plate_match) if plate_match else None,
+                    "probeMatchesStored": list(probe_match) if probe_match else None,
+                    "storedVsPlateMaxDiff": d_sp, "probeVsStoredMaxDiff": d_pr}
+        return {"status": "fail", "mechanism": "removal_probe_did_not_restore_stored_values",
+                "plateMatchesStored": list(plate_match) if plate_match else None,
+                "probeMatchesStored": list(probe_match) if probe_match else None,
+                "storedVsPlateMaxDiff": d_sp, "probeVsStoredMaxDiff": d_pr}
+    return {"status": "pass", "mechanism": "device_read_stored_values",
+            "plateMatchesStored": list(plate_match) if plate_match else None,
+            "storedVsPlateMaxDiff": d_sp}
+
+
+def managed_separations_check(pdf, stored, dcm, media_box=None, crop_box=None, dpi=150):
+    """Compare stored CMYK operands with tiffsep plate readings, plus the RCA control probe."""
+    if not stored or stored.get("status") != "pass" or not stored.get("tuples"):
+        return {"status": "pending", "error": "no stored CMYK operator to compare"}
+    stored_tuples = [tuple(t["cmyk"]) for t in stored["tuples"]]
+    result = {"dpi": dpi, "storedTuples": stored["tuples"][:8],
+              "declaredDefaultCMYK": bool(dcm.get("ok")),
+              "declaredSha256": dcm.get("streamSha256")}
+    try:
+        with tempfile.TemporaryDirectory() as tmp:
+            arr = _render_sep_plates(pdf, dpi, tmp, media_box, crop_box)
+            plate = _dominant_plate_ink(arr)
+            result["plateInk"] = plate["inkPercent"]
+            result["plateBytes"] = plate["plateBytes"]
+            result["plateCoverage"] = plate["coverage"]
+            result["sampledPixels"] = plate["sampledPixels"]
+            probe_ink = None
+            probe_sha = None
+            if dcm.get("ok"):
+                from pypdf import PdfReader as _R, PdfWriter as _W
+                probe_path = os.path.join(tmp, "probe.pdf")
+                writer = _W(clone_from=_R(pdf))
+                p = writer.pages[0]
+                res = _page_resources(p)
+                cs = res.get("/ColorSpace")
+                cs = cs.get_object() if hasattr(cs, "get_object") else cs
+                if cs is not None and "/DefaultCMYK" in cs:
+                    del cs["/DefaultCMYK"]
+                writer.write(probe_path)
+                probe_sha = _sha_bytes(open(probe_path, "rb").read())
+                parr = _render_sep_plates(probe_path, dpi, tmp, media_box, crop_box)
+                probe_ink = _dominant_plate_ink(parr)["inkPercent"]
+                result["probeInk"] = probe_ink
+                result["probeSha256"] = probe_sha
+            verdict = _classify_managed(stored_tuples, plate["inkPercent"], probe_ink,
+                                        bool(dcm.get("ok")),
+                                        bool(dcm.get("count")))
+            result.update(verdict)
+            result["gsVersion"] = subprocess.run([GS, "--version"], capture_output=True,
+                                                 text=True).stdout.strip()
+    except Exception as exc:  # noqa: BLE001
+        result.update({"status": "pending", "error": str(exc)})
+    return result
+
+
+def _read_ppm(path):
+    data = open(path, "rb").read()
+    pos = [0]
+
+    def tok():
+        while pos[0] < len(data):
+            if data[pos[0]:pos[0] + 1] == b"#":
+                while pos[0] < len(data) and data[pos[0]] not in (10, 13):
+                    pos[0] += 1
+            elif data[pos[0]:pos[0] + 1].isspace():
+                pos[0] += 1
+            else:
+                break
+        start = pos[0]
+        while pos[0] < len(data) and not data[pos[0]:pos[0] + 1].isspace():
+            pos[0] += 1
+        return data[start:pos[0]]
+
+    magic = tok()
+    if magic != b"P6":
+        raise RuntimeError("not a P6 PPM: %r" % magic)
+    w, h, maxv = int(tok()), int(tok()), int(tok())
+    pos[0] += 1
+    buf = data[pos[0]:pos[0] + w * h * 3]
+    if len(buf) < w * h * 3:
+        raise RuntimeError("PPM short: %d < %d" % (len(buf), w * h * 3))
+    return np.frombuffer(buf, dtype=np.uint8).reshape(h, w, 3)
+
+
+def _render_rgb(pdf, dpi, tmp, tag):
+    gs_path = os.path.join(tmp, "%s-gs.ppm" % tag)
+    mu_path = os.path.join(tmp, "%s-mu.ppm" % tag)
+    subprocess.run([GS, "-q", "-dBATCH", "-dNOPAUSE", "-dSAFER",
+                    "-sDEVICE=ppmraw", "-r%d" % dpi,
+                    "-dTextAlphaBits=4", "-dGraphicsAlphaBits=4",
+                    "-o", gs_path, pdf], check=True,
+                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    subprocess.run([MUTOOL, "draw", "-q", "-r", str(dpi), "-F", "ppm",
+                    "-o", mu_path, pdf], check=True,
+                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    return _read_ppm(gs_path), _read_ppm(mu_path)
+
+
+def _dominant_rgb(arr):
+    h, w, _ = arr.shape
+    step = max(1, min(h, w) // 400)
+    sample = arr[::step, ::step].reshape(-1, 3)
+    from collections import Counter
+    top, n = Counter(map(tuple, sample.tolist())).most_common(1)[0]
+    return {"rgb": [int(x) for x in top], "hex": "#%02X%02X%02X" % top,
+            "coverage": round(n / float(len(sample)), 4)}
+
+
+def _classify_renderers(agreement):
+    """Pure classifier for two independent renderers on the same file."""
+    if not agreement:
+        return {"status": "pending", "error": "no renderer statistics"}
+    med = agreement.get("median", 99)
+    p99 = agreement.get("p99", 99)
+    over5 = agreement.get("over5Percent", 99)
+    ok = med <= 2.0 and p99 <= 8.0 and over5 <= 2.0
+    return {"status": "pass" if ok else "fail",
+            "thresholds": {"median": 2.0, "p99": 8.0, "over5Percent": 2.0}}
+
+
+def independent_render_check(pdf, ai, media_box, trim_box, dpi=100):
+    """Ghostscript vs MuPDF on the same file, cropped to TrimBox."""
+    if not MUTOOL:
+        return {"status": "pending", "error": "mutool not found; install mupdf-tools",
+                "renderers": {"gs": subprocess.run([GS, "--version"], capture_output=True,
+                                                   text=True).stdout.strip(),
+                              "mupdf": None}}
+    result = {"dpi": dpi, "renderers": {"gs": subprocess.run(
+        [GS, "--version"], capture_output=True, text=True).stdout.strip(),
+        "mupdf": subprocess.run([MUTOOL, "-v"], capture_output=True,
+                                text=True).stderr.strip().splitlines()[0]}}
+    try:
+        with tempfile.TemporaryDirectory() as tmp:
+            for tag, path in (("final", pdf), ("ai", ai)):
+                if not path or not os.path.exists(path):
+                    result[tag] = {"status": "pending", "error": "file missing"}
+                    continue
+                gs, mu = _render_rgb(path, dpi, tmp, tag)
+                binfo = pdfprobe.inspect(path).get("boxes", {})
+                b_media = binfo.get("MediaBox") or media_box
+                b_trim = binfo.get("TrimBox") or b_media
+                if b_media and b_trim and len(b_media) == 4 and len(b_trim) == 4:
+                    sc = dpi / 72.0
+                    x0 = max(0, int(round((b_trim[0] - b_media[0]) * sc)))
+                    x1 = min(gs.shape[1], int(round((b_trim[2] - b_media[0]) * sc)))
+                    y0 = max(0, int(round((b_media[3] - b_trim[3]) * sc)))
+                    y1 = min(gs.shape[0], int(round((b_media[3] - b_trim[1]) * sc)))
+                    gs = raster.crop(gs, x0, y0, x1, y1)
+                    mu = raster.crop(mu, x0, y0, min(mu.shape[1], x1), min(mu.shape[0], y1))
+                hh = min(gs.shape[0], mu.shape[0])
+                ww = min(gs.shape[1], mu.shape[1])
+                gs = raster.resize_nearest(gs, ww, hh)
+                mu = raster.resize_nearest(mu, ww, hh)
+                cmp = raster.compare_aligned(gs, mu, max_shift=2, flat=True, flat_radius=3)
+                agreement = {k: cmp.get(k) for k in
+                             ("median", "p90", "p99", "over5Percent", "flatOnly", "pixels")}
+                verdict = _classify_renderers(agreement)
+                result[tag] = {"status": verdict["status"],
+                               "agreement": agreement,
+                               "gsDominant": _dominant_rgb(gs),
+                               "mupdfDominant": _dominant_rgb(mu),
+                               "thresholds": verdict.get("thresholds")}
+            final_ok = (result.get("final") or {}).get("status") == "pass"
+            ai_status = (result.get("ai") or {}).get("status")
+            if not final_ok:
+                result["status"] = "fail" if (result.get("final") or {}).get("status") == "fail" else "pending"
+            elif ai_status == "pending":
+                result["status"] = "pending"
+            elif ai_status == "fail":
+                result["status"] = "pending"
+                result["note"] = "AI reference render disagrees between renderers; AI is not a print input"
+            else:
+                result["status"] = "pass"
+    except Exception as exc:  # noqa: BLE001
+        result.update({"status": "pending", "error": str(exc)})
+    return result
+
+
+def profilechain_check(conv, spec_sha, oi_sha, dcm_sha):
+    """One recorded conversion profile must bind config, audit, OutputIntent and /DefaultCMYK."""
+    if not conv:
+        return {"status": "pending", "error": "work/conversion.json missing",
+                "specSha256": spec_sha, "outputIntentSha256": oi_sha,
+                "defaultCMYKSha256": dcm_sha}
+    recorded = conv.get("targetICC")
+    recorded_sha = conv.get("targetICCsha256")
+    vals = {"recorded": recorded_sha, "spec": spec_sha,
+            "outputIntent": oi_sha, "defaultCMYK": dcm_sha}
+    present = [v for v in vals.values() if v]
+    ok = bool(recorded_sha and len(set(present)) == 1 and len(present) == 4)
+    return {"status": "pass" if ok else "fail",
+            "recordedIn": "work/conversion.json",
+            "recordedPath": recorded,
+            "sha256": vals,
+            "note": "Audit and render profiles must be the recorded conversion profile, not a library constant."
+            if ok else "One of config / conversion / OutputIntent / DefaultCMYK points at a different ICC."}
+
+
+def load(path, default=None):
+    try:
+        with open(path, encoding="utf-8") as fh:
+            return json.load(fh)
+    except Exception:
+        return default
+
+
+def pt2mm(v):
+    return round(v * 25.4 / 72, 2)
+
+
+def mm2pt(v):
+    return v * 72 / 25.4
+
+
+def trim_mm(job, spec):
+    if job.get("trim", {}).get("preset"):
+        w, h = spec["trimPresetsMm"][job["trim"]["preset"]]
+        return float(w), float(h)
+    return float(job["trim"]["w"]), float(job["trim"]["h"])
+
+
+def mm2pt(v):
+    return v * 72 / 25.4
+
+
+def fold_check(job, spec, boxes):
+    """A3/A4 fold: fold line at the trim centre and equal panels.
+
+    Only runs when job.fold is declared. A job without fold metadata is not a
+    fold job; this returns pass with declared=false rather than inventing one.
+    """
+    fold = job.get("fold")
+    trim = boxes.get("TrimBox")
+    if not fold:
+        return {"status": "pass", "declared": False,
+                "note": "no fold metadata; fold check not applicable"}
+    if not trim or len(trim) != 4:
+        return {"status": "pending", "declared": True, "error": "TrimBox missing"}
+    tw = pt2mm(trim[2] - trim[0])
+    th = pt2mm(trim[3] - trim[1])
+    axis = str(fold.get("axis") or "vertical")
+    ftype = str(fold.get("type") or "half")
+    span = tw if axis == "vertical" else th
+    position = fold.get("positionMm")
+    panels = fold.get("panels")
+    errors = []
+    if position is not None:
+        try:
+            position = float(position)
+        except (TypeError, ValueError):
+            errors.append("fold.positionMm is not numeric")
+            position = None
+    if position is None and ftype == "half":
+        position = round(span / 2.0, 3)
+    if position is None:
+        errors.append("fold.positionMm missing")
+    elif position <= 0 or position >= span:
+        errors.append("fold line outside trim: %.2f mm of %.2f mm" % (position, span))
+    elif ftype == "half" and abs(position - span / 2.0) > 0.5:
+        errors.append("half fold is not at trim centre: %.2f vs %.2f mm"
+                      % (position, span / 2.0))
+    if panels:
+        try:
+            panels = [float(x) for x in panels]
+        except (TypeError, ValueError):
+            panels = None
+            errors.append("fold.panels is not numeric")
+        if panels:
+            if abs(sum(panels) - span) > 0.5:
+                errors.append("panels sum %.2f mm != trim span %.2f mm"
+                              % (sum(panels), span))
+            if ftype == "half" and max(panels) - min(panels) > 0.5:
+                errors.append("half-fold panels differ: %s" % panels)
+    mark_pt = None
+    if position is not None:
+        mark_pt = (round(trim[0] + mm2pt(position), 3) if axis == "vertical"
+                   else round(trim[1] + mm2pt(position), 3))
+    return {
+        "status": "pass" if not errors else "fail",
+        "declared": True,
+        "type": ftype,
+        "axis": axis,
+        "trimSpanMm": round(span, 2),
+        "positionMm": position,
+        "panelsMm": panels,
+        "foldMarkCoordinatePt": mark_pt,
+        "errors": errors,
+        "note": "Marks geometry is validated separately by pdf.marks.geometry; "
+                "this check ties the fold line to the trim and panel widths.",
+    }
+
+
+def check(cid, label, status, value, expected, evidence=""):
+    return {"id": cid, "label": label, "status": status,
+            "value": value, "expected": expected, "evidence": evidence}
+
+
 
 
 def render_tac(pdf, dpi, vector_cmyk=None, media_box=None, crop_box=None):
@@ -117,7 +842,7 @@ def render_tac(pdf, dpi, vector_cmyk=None, media_box=None, crop_box=None):
     return out
 
 
-def bleed_content(pdf, boxes, bleed_mm, dpi=300):
+def bleed_content(pdf, boxes, bleed_mm, target_icc, dpi=300):
     media = boxes.get("MediaBox")
     trim = boxes.get("TrimBox")
     if not media or not trim or len(media) != 4 or len(trim) != 4:
@@ -127,7 +852,7 @@ def bleed_content(pdf, boxes, bleed_mm, dpi=300):
     with tempfile.TemporaryDirectory() as tmp:
         tif = os.path.join(tmp, "p.tif")
         subprocess.run([GS, "-q", "-dBATCH", "-dNOPAUSE", "-dSAFER", "-sDEVICE=tiff32nc",
-                        "-sDefaultCMYKProfile=%s" % color.FOGRA39, "-dOverrideICC=true",
+                        "-sDefaultCMYKProfile=%s" % target_icc, "-dOverrideICC=true",
                         "-r%d" % dpi, "-o", tif, pdf], check=True,
                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         arr = raster.read_tiff(tif)["data"]
@@ -155,24 +880,24 @@ def bleed_content(pdf, boxes, bleed_mm, dpi=300):
     }
 
 
-def visual_compare(final_pdf, ai, dpi=150, crop_mm=0.0, media_box=None, crop_box=None):
+def visual_compare(final_pdf, ai, target_icc, dpi=150, crop_mm=0.0, media_box=None, crop_box=None):
     with tempfile.TemporaryDirectory() as tmp:
         f_cmyk = os.path.join(tmp, "final-cmyk.tif")
         f_sim = os.path.join(tmp, "final-sim.tif")
         a_cmyk = os.path.join(tmp, "ai-cmyk.tif")
         a_sim = os.path.join(tmp, "ai-sim.tif")
         subprocess.run([GS, "-q", "-dBATCH", "-dNOPAUSE", "-dSAFER", "-sDEVICE=tiff32nc",
-                        "-sDefaultCMYKProfile=%s" % color.FOGRA39, "-dOverrideICC=true",
+                        "-sDefaultCMYKProfile=%s" % target_icc, "-dOverrideICC=true",
                         "-r%d" % dpi, "-o", f_cmyk, final_pdf], check=True,
                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        subprocess.run(["tificc", "-n", "-i" + color.FOGRA39, "-o" + color.SRGB,
+        subprocess.run(["tificc", "-n", "-i" + target_icc, "-o" + color.SRGB,
                         "-t1", "-b", "-w8", f_cmyk, f_sim], check=True,
                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         subprocess.run([GS, "-q", "-dBATCH", "-dNOPAUSE", "-dSAFER", "-sDEVICE=tiff32nc",
-                        "-sDefaultCMYKProfile=%s" % color.FOGRA39, "-dOverrideICC=true",
+                        "-sDefaultCMYKProfile=%s" % target_icc, "-dOverrideICC=true",
                         "-r%d" % dpi, "-o", a_cmyk, ai], check=True,
                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        subprocess.run(["tificc", "-n", "-i" + color.FOGRA39, "-o" + color.SRGB,
+        subprocess.run(["tificc", "-n", "-i" + target_icc, "-o" + color.SRGB,
                         "-t1", "-b", "-w8", a_cmyk, a_sim], check=True,
                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         f = raster.read_tiff(f_sim)["data"][..., :3]
@@ -199,6 +924,14 @@ def visual_compare(final_pdf, ai, dpi=150, crop_mm=0.0, media_box=None, crop_box
 def analyse(pdf, job, spec, selftest=False):
     info = pdfprobe.inspect(pdf)
     raw = open(pdf, "rb").read()
+    job_dir = os.path.dirname(pdf)
+    if os.path.basename(pdf) == "cmyk.pdf":
+        job_dir = os.path.dirname(job_dir)
+    conv = load(os.path.join(job_dir, "work", "conversion.json")) or {}
+    spec_icc = spec["print"]["iccProfile"]
+    recorded_icc = conv.get("targetICC") if conv else None
+    render_icc = recorded_icc if recorded_icc and os.path.exists(recorded_icc) else spec_icc
+    spec_icc_sha = hashlib.sha256(open(spec_icc, "rb").read()).hexdigest()
     tw, th = trim_mm(job, spec)
     b = float(job.get("bleedMm", spec["print"].get("bleedMm", 0)) or 0)
     checks = []
@@ -265,7 +998,7 @@ def analyse(pdf, job, spec, selftest=False):
                                 "pass" if media_ok else "fail",
                                 {"media": media, "bleed": bleed}, "MediaBox covers the full bleed",
                                 "BleedBox must not exceed the actual page"))
-        bc = bleed_content(pdf, boxes, b)
+        bc = bleed_content(pdf, boxes, b, render_icc)
         checks.append(check("pdf.bleedcontent", "Final PDF bleed content",
                             bc.get("status", "pending"), bc,
                             "No pure white within 3 mm on all four sides; PENDING when there is no bleed area",
@@ -278,48 +1011,84 @@ def analyse(pdf, job, spec, selftest=False):
     cond = chain[0]["condition"] if chain else None
     dest_profile = chain[0]["destProfile"] if chain else None
     pdfx_required = _pdfx_target(job, spec)
-    target_icc = spec["print"]["iccProfile"]
-    target_sha = hashlib.sha256(open(target_icc, "rb").read()).hexdigest()
+    target_sha = spec_icc_sha
     profiles = info.get("profiles", [])
-    # /DefaultCMYK must be a colour space array [/ICCBased <stream>]; a
-    # bare stream reference is not a valid colour space and is ignored.
-    dcm_ok = False
-    try:
-        from pypdf import PdfReader as _ICCReader
-        from pypdf.generic import ArrayObject as _ICCArray
-        _p = _ICCReader(pdf).pages[0]
-        _cs = _p["/Resources"]["/ColorSpace"].get_object()
-        _d = _cs.get("/DefaultCMYK")
-        _d = _d.get_object() if hasattr(_d, "get_object") else _d
-        dcm_ok = (isinstance(_d, _ICCArray) and len(_d) == 2
-                  and str(_d[0]) == "/ICCBased")
-        # The referenced stream itself must be the target ICC, not just
-        # some other CMYK profile that happens to be embedded elsewhere.
-        if dcm_ok:
-            _stream = _d[1].get_object()
-            _icc_data = _stream.get_data()
-            dcm_ok = (hashlib.sha256(_icc_data).hexdigest() == target_sha
-                      and int(_stream.get("/N", 0)) == 4
-                      and len(_icc_data) > 132
-                      and _icc_data[16:20] == b"CMYK"
-                      and _icc_data[36:40] == b"acsp")
-    except Exception:  # noqa: BLE001
-        dcm_ok = False
+    dcm = defaultcmyk_check(pdf, target_sha)
+    dcm_ok = dcm.get("ok", False)
+    dcm["conversionIntent"] = conv.get("renderingIntent")
+    if dcm.get("headerIntent") is not None and conv.get("renderingIntent") is not None:
+        if dcm.get("headerIntent") != conv.get("renderingIntent"):
+            dcm["intentObservation"] = (
+                "ICC header intent %s vs conversion intent %s; no /Intent key. "
+                "Printer RIP behaviour is unverified (RCA F14)."
+                % (dcm.get("headerIntent"), conv.get("renderingIntent")))
+        else:
+            dcm["intentObservation"] = "header intent matches the recorded conversion intent"
+    else:
+        dcm["intentObservation"] = "no recorded conversion intent; header value is informational only"
     headers = raw[:8].decode("latin1")
     hdr_ok = headers.startswith("%PDF-1.6")
     intent_ok = (len(chain) == 1 and bool(dest_profile)
+                 and chain[0].get("subtype") == "/GTS_PDFX"
                  and dest_profile.get("sha256") == target_sha
                  and dest_profile.get("isCMYK") and not dest_profile.get("isRGB"))
     checks.append(check("pdf.outputintent", "GTS_PDFX OutputIntent + target ICC",
                         "pass" if (intent_ok and dcm_ok and hdr_ok) else "fail",
-                        {"count": len(chain), "condition": cond,
-                         "header": headers.strip(),
+                        {"count": len(chain), "subtype": chain[0].get("subtype") if chain else None,
+                         "condition": cond, "header": headers.strip(),
                          "defaultCMYKValid": dcm_ok, "destProfile": dest_profile,
                          "iccSha256": target_sha,
                          "profiles": [{k: x.get(k) for k in ("description", "space", "sha256")}
                                       for x in profiles]},
                         "Exactly 1 GTS_PDFX; DestOutputProfile = the spec delivery ICC; /DefaultCMYK uses the same ICC",
                         "Both the ICC hash and the structure must match; a label cannot fake a conversion"))
+
+    checks.append(check("pdf.defaultcmyk", "/DefaultCMYK default colour space",
+                        "pass" if dcm.get("ok") else "fail", dcm,
+                        "Exactly one [/ICCBased <delivery ICC>] with N=4 on the page; no form-level override",
+                        "The RCA 2026-11-16 probe: this declaration changes how the same k values are read"))
+    pchain = profilechain_check(conv, spec_icc_sha,
+                                (dest_profile or {}).get("sha256"),
+                                dcm.get("streamSha256"))
+    checks.append(check("pdf.profilechain", "ICC binding chain (config / conversion / output intent / default)",
+                        pchain.get("status", "pending"), pchain,
+                        "One SHA-256 across spec.print.iccProfile, work/conversion.json, "
+                        "DestOutputProfile and /DefaultCMYK",
+                        "Audit and render read the recorded conversion profile, never a library constant"))
+    inherited = inheritedcs_check(pdf, target_sha)
+    checks.append(check("pdf.inheritedcs", "Inherited colour spaces (page / Form XObject)",
+                        inherited.get("status", "pending"),
+                        {k: inherited.get(k) for k in
+                         ("used", "scopes", "unresolved", "rgbSpaces", "wrongIcc",
+                          "spotNames", "inheritedForms", "deviceCMYKInInheritedForms",
+                          "pageDefaultCMYK", "deviceCMYKSource", "error")},
+                        "Every cs/CS name resolves; CMYK ICC is the delivery ICC; no RGB inherited space",
+                        "A form with an empty /Resources relies on the page default space; check it explicitly"))
+    stored = stored_ink_check(pdf)
+    checks.append(check("pdf.inkStored", "Stored CMYK values (content stream)",
+                        stored.get("status", "pending"), stored,
+                        "Read k/K and four-component scn/SCN operands; these are the file ink values",
+                        "A separation plate reading is a device-space value, not the file operand"))
+    media = boxes.get("MediaBox")
+    sep_crop = boxes.get("BleedBox") if layout == "marks" else boxes.get("TrimBox")
+    managed = managed_separations_check(pdf, stored, dcm, media_box=media, crop_box=sep_crop)
+    checks.append(check("pdf.separationsManaged", "Managed separations (stored vs rendered plates)",
+                        managed.get("status", "pending"),
+                        {k: managed.get(k) for k in
+                         ("storedTuples", "plateInk", "probeInk", "mechanism",
+                          "plateMatchesStored", "probeMatchesStored",
+                          "storedVsPlateMaxDiff", "probeVsStoredMaxDiff",
+                          "declaredDefaultCMYK", "plateCoverage", "dpi",
+                          "gsVersion", "probeSha256", "error")},
+                        "With a declaration, removing /DefaultCMYK must restore a stored tuple; "
+                        "without one, the plate must equal a stored tuple",
+                        "The RCA control probe is now a regression gate"))
+    fold = fold_check(job, spec, boxes)
+    checks.append(check("pdf.fold", "A3/A4 fold line and panels", fold.get("status"), fold,
+                        "Half fold at trim centre; panels equal and summing to the trim span; "
+                        "a job without fold metadata is not applicable",
+                        "Fold geometry is separate from the 24 mark segments"))
+
 
     # PDF/X-4 structural conformance: internal Preflight equivalent over
     # file facts. It does not replace Acrobat Preflight or the printer's own
@@ -690,9 +1459,6 @@ def analyse(pdf, job, spec, selftest=False):
                         "The vector value catches small text and hairlines that the raster misses"))
 
     # Visual comparison with the approved AI
-    job_dir = os.path.dirname(pdf)
-    if os.path.basename(pdf) == "cmyk.pdf":
-        job_dir = os.path.dirname(job_dir)
     ai = os.path.join(job_dir, job["output"]["ai"])
     ai_sha = None
     if not trim:
@@ -704,12 +1470,12 @@ def analyse(pdf, job, spec, selftest=False):
         try:
             media = boxes.get("MediaBox")
             if layout == "marks":
-                visual = visual_compare(pdf, ai, dpi=150, media_box=media, crop_box=trim)
+                visual = visual_compare(pdf, ai, render_icc, dpi=150, media_box=media, crop_box=trim)
             else:
                 crop_mm = 0.0
                 if media and trim and len(media) == 4 and pt2mm(media[2] - media[0]) > tw + 0.5:
                     crop_mm = b
-                visual = visual_compare(pdf, ai, dpi=150, crop_mm=crop_mm)
+                visual = visual_compare(pdf, ai, render_icc, dpi=150, crop_mm=crop_mm)
             ink_bad = visual.get("inkMismatchPercent", 0) > 0.02
             strong_bad = visual.get("strongBlobPercent", 0) > 0.0005
             visual["status"] = "pass" if (visual["median"] <= 0.5
@@ -725,6 +1491,13 @@ def analyse(pdf, job, spec, selftest=False):
     else:
         checks.append(check("pdf.visual", "Final PDF vs approved AI soft proof",
                             "pending", "AI not found", "AI present", ""))
+
+    independent = independent_render_check(pdf, ai if os.path.exists(ai) else None,
+                                           boxes.get("MediaBox"), trim)
+    checks.append(check("pdf.independentRender", "Independent renderers (Ghostscript / MuPDF)",
+                        independent.get("status", "pending"), independent,
+                        "Both renderers agree on the same file inside TrimBox: median ≤ 2, p99 ≤ 8, over5 ≤ 2%",
+                        "Two engines reduce the risk of a single-renderer artefact"))
 
     # attention is a non-pass result; never let it fall through to PASS.
     fails = [c for c in checks if c["status"] in ("fail", "attention")]
@@ -781,9 +1554,10 @@ def main():
     result = analyse(pdf, job, spec, selftest=selftest)
     if selftest:
         expected = {
-            "pdf.trimbox": "fail",
-            "pdf.bleedbox": "fail",
             "pdf.outputintent": "fail",
+            "pdf.defaultcmyk": "fail",
+            "pdf.profilechain": "fail",
+            "pdf.inkStored": "pass",
             "pdf.fonts": "pass",
             "pdf.pdfx": "fail",
             "pdf.rgb": "pass",

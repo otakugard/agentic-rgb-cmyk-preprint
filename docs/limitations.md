@@ -7,7 +7,8 @@ by this repository.
 
 | Symptom | Cause | Handling |
 |---|---|---|
-| Source PDF is 1.333× too large | Figma writes 1 px as 1 pt | multiply by 0.75 (`figma.pxToPt`) |
+| Source PDF is 1.333× too large | Figma writes 1 px as 1 pt | multiply by 0.75 (`figma.pxToPt`); a direct sRGB PDF stays at 1:1 |
+| A direct PDF stops at `01d` | its page is not final trim plus bleed | export at final size or start a Figma job; the pipeline does not auto-fit |
 | Text cannot be edited in the `.ai` | Figma outlines text as Type3 | change text in Figma and rerun |
 | Photos are recompressed | DCTDecode in the Figma PDF | use `rawImages` when lossless pixels matter |
 | Imported page becomes one non-native object | placed + embed route | open natively with `app.open()` |
@@ -27,6 +28,8 @@ by this repository.
 | One CMYK tuple disappears | Illustrator omits hidden objects on save | WARN when the visible render is identical |
 | Byte scan misses Type3 / SMask | they live in object streams | decode object streams first (`lib/pdfprobe.py`) |
 | Control probe deviates after an ICC change | a library constant still points at the old profile | pass the profile explicitly; never rely on a module default |
+| A CMYK PDF reads differently in another tool | the file declares `/DefaultCMYK`; the device reads through its own space | record stored operands and device plates separately; run the removal probe |
+| Two runs produce different PDF bytes | dates, `/ID` and titles differ | compare content streams, histograms and renders; state the metadata difference |
 | DeltaE00 jumps after a single-K override | greedy nearest-match pairing | make the override an explicit input (`konly-targets.json`) |
 
 ## Overprint
@@ -52,6 +55,13 @@ by this repository.
 | `app.open` returns the user's document | Illustrator reuses open documents | record the document list first; stop on a hit; never close the user's document |
 | Two jobs collide | Illustrator has one foreground document | one job at a time; `run.sh` takes a lock |
 | `pypdf` reports replaced content but the PDF is unchanged | `page.get_contents()` wraps the stream | edit the `/Contents` indirect object, then verify `remainingTargetTuples` |
+
+## Source evidence
+
+A Figma snapshot captured after export proves that no write happened during the
+close-out window. It does not prove the master matched the export at export
+time. A direct sRGB PDF has no Figma node; Gate 1 uses its source hash, embedded
+profile and page geometry instead.
 
 ## Scope
 

@@ -130,13 +130,12 @@ fi
 if command -v mutool >/dev/null 2>&1; then
   pass "$(mutool -v 2>&1 | head -n1)"
 else
-  warn "mutool not found; visual diff falls back to Ghostscript"
+  warn "mutool not found; the independent-render check will be PENDING"
 fi
 
 section "Proof profiles"
 for f in \
-  "/System/Library/ColorSync/Profiles/sRGB Profile.icc" \
-  "/Library/Application Support/Adobe/Color/Profiles/Recommended/CoatedFOGRA39.icc"; do
+  "/System/Library/ColorSync/Profiles/sRGB Profile.icc"; do
   if [ -f "$f" ]; then
     pass "present $f"
   else
@@ -187,7 +186,7 @@ for f in scripts/01-prepare.sh scripts/run.sh scripts/lib/env-check.sh install/v
     fail "not executable: $f (chmod +x)"
   fi
 done
-for f in scripts/07c-finalize-pdf.py scripts/08-gate3.py scripts/09-selftest.py; do
+for f in scripts/07c-finalize-pdf.py scripts/08-gate3.py scripts/09-selftest.py scripts/13-rca-selftest.py; do
   [ -f "$f" ] && pass "present $f" || fail "missing $f"
 done
 
@@ -201,6 +200,15 @@ if [ "$FULL" = "1" ]; then
     fi
   else
     fail "09-selftest failed: $(tail -n1 /tmp/preprint-selftest.err)"
+  fi
+  if "$PY" scripts/13-rca-selftest.py >/tmp/preprint-rca-selftest.json 2>/tmp/preprint-rca-selftest.err; then
+    if "$PY" -c 'import json,sys;d=json.load(open("/tmp/preprint-rca-selftest.json"));sys.exit(0 if d.get("ok") else 1)'; then
+      pass "13-rca-selftest covered the RCA regression gates"
+    else
+      fail "13-rca-selftest returned ok=false"
+    fi
+  else
+    fail "13-rca-selftest failed: $(tail -n1 /tmp/preprint-rca-selftest.err)"
   fi
 fi
 

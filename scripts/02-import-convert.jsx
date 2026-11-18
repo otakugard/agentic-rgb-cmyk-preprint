@@ -2,18 +2,19 @@
 
 /*
  * 02-import-convert.jsx
- * Turns work/cmyk.pdf (already converted to Coated FOGRA39 by 01-prepare.sh) into <job-id>.ai.
+ * Turns work/cmyk.pdf (already converted to the delivery ICC by 01-prepare.sh) into <job-id>.ai.
  *
  * Precondition: 01-prepare.sh has run. This script does no colour conversion.
  * Ghostscript fixes the colour. This script handles size and structure only.
  *
  * Route (measured):
  *   1. app.open(work/cmyk.pdf) uses native PDF import and returns editable vector artwork
- *   2. Scale everything to the real trim size (Figma 1px=1pt, factor 0.75)
+ *   2. For a Figma export, scale to the real trim size (Figma 1px=1pt, factor 0.75);
+ *      a direct sRGB PDF is already at 1:1.
  *   3. Align the artboard and save print.ai
  *
  * Place + embed turns the whole page into one NonNativeItem in our tests; the colour stays RGB.
- * doc-color-cmyk follows the current Illustrator working CMYK space; the result can leave FOGRA39.
+ * doc-color-cmyk follows the current Illustrator working CMYK space; the result can leave the delivery ICC.
  *
  * Input (injected by run.sh): JOB_DIR, SPEC_PATH
  * Output: <JOB_DIR>/<job-id>.ai, <JOB_DIR>/result.json
@@ -340,7 +341,7 @@ try {
   var saveOpts = new IllustratorSaveOptions();
   saveOpts.pdfCompatible = true;
   /* The default is false. Without an embedded profile, another machine reads this .ai
-     with its own CMYK working space, and the FOGRA39 values lose their basis. */
+     with its own CMYK working space, and the delivery-ICC values lose their basis. */
   try { saveOpts.embedICCProfile = true; } catch (eICC) { warnings.push("IllustratorSaveOptions rejects embedICCProfile; ICC not embedded"); }
 
   var backupPath = outPath + ".prev";
