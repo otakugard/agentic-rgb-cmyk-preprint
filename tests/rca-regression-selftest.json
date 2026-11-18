@@ -1,0 +1,225 @@
+{
+  "ok": true,
+  "fixture": "generated PDFs in a temporary directory; no client artwork",
+  "targetICC": {
+    "path": "color/profiles/iso-coated-v2-300.icc",
+    "sha256": "c6b4b62f0726243742eced8b9669476a6be89e581f50a7600ed8b6fcbb9cdab8"
+  },
+  "checks": {
+    "defaultcmyk.base": {
+      "pass": true,
+      "expected": "pass",
+      "actual": "pass",
+      "evidence": null
+    },
+    "defaultcmyk.missing": {
+      "pass": true,
+      "expected": "fail",
+      "actual": "fail",
+      "evidence": null
+    },
+    "defaultcmyk.bareStream": {
+      "pass": true,
+      "expected": "fail",
+      "actual": "fail",
+      "evidence": null
+    },
+    "defaultcmyk.wrongICC": {
+      "pass": true,
+      "expected": "fail",
+      "actual": "fail",
+      "evidence": null
+    },
+    "outputintent.removed": {
+      "pass": true,
+      "expected": 0,
+      "actual": 0,
+      "evidence": null
+    },
+    "outputintent.subtype": {
+      "pass": true,
+      "expected": "fail",
+      "actual": "fail",
+      "evidence": {
+        "subtype": "/GTS_PDFA1"
+      }
+    },
+    "profilechain.base": {
+      "pass": true,
+      "expected": "pass",
+      "actual": "pass",
+      "evidence": null
+    },
+    "profilechain.missingOutputIntent": {
+      "pass": true,
+      "expected": "fail",
+      "actual": "fail",
+      "evidence": null
+    },
+    "profilechain.missingConversionRecord": {
+      "pass": true,
+      "expected": "pending",
+      "actual": "pending",
+      "evidence": null
+    },
+    "inheritedcs.undefinedName": {
+      "pass": true,
+      "expected": "fail",
+      "actual": "fail",
+      "evidence": {
+        "unresolved": [
+          {
+            "scope": "page//FmTest",
+            "name": "CSX"
+          }
+        ]
+      }
+    },
+    "inheritedcs.rgbICC": {
+      "pass": true,
+      "expected": "fail",
+      "actual": "fail",
+      "evidence": {
+        "rgbSpaces": [
+          {
+            "scope": "page//FmTest",
+            "name": "CS0",
+            "source": "ICCBased"
+          }
+        ]
+      }
+    },
+    "inheritedcs.formWithoutResources": {
+      "pass": true,
+      "expected": "pass",
+      "actual": "pass",
+      "evidence": {
+        "inheritedForms": 0
+      }
+    },
+    "inkStored.noCMYK": {
+      "pass": true,
+      "expected": "pending",
+      "actual": "pending",
+      "evidence": null
+    },
+    "separationsManaged.controlProbe": {
+      "pass": true,
+      "expected": "pass",
+      "actual": "pass",
+      "evidence": {
+        "mechanism": "defaultcmyk_reseparation_confirmed_by_removal_probe",
+        "plateInk": [
+          38.04,
+          13.73,
+          47.06,
+          0.0
+        ],
+        "probeInk": [
+          40.0,
+          10.59,
+          45.1,
+          5.1
+        ]
+      }
+    },
+    "separationsManaged.wrongDeclaration": {
+      "pass": true,
+      "expected": "fail",
+      "actual": "fail",
+      "evidence": {
+        "mechanism": "declaration_is_not_the_delivery_icc"
+      }
+    },
+    "classifier.managedConfirmed": {
+      "pass": true,
+      "expected": "pass",
+      "actual": "pass",
+      "evidence": null
+    },
+    "classifier.managedUnexplained": {
+      "pass": true,
+      "expected": "fail",
+      "actual": "fail",
+      "evidence": null
+    },
+    "classifier.managedWrongDeclaration": {
+      "pass": true,
+      "expected": "fail",
+      "actual": "fail",
+      "evidence": null
+    },
+    "classifier.renderersAgree": {
+      "pass": true,
+      "expected": "pass",
+      "actual": "pass",
+      "evidence": null
+    },
+    "classifier.renderersDisagree": {
+      "pass": true,
+      "expected": "fail",
+      "actual": "fail",
+      "evidence": null
+    },
+    "fold.halfAtCentre": {
+      "pass": true,
+      "expected": "pass",
+      "actual": "pass",
+      "evidence": null
+    },
+    "fold.offCentre": {
+      "pass": true,
+      "expected": "fail",
+      "actual": "fail",
+      "evidence": null
+    },
+    "fold.unequalPanels": {
+      "pass": true,
+      "expected": "fail",
+      "actual": "fail",
+      "evidence": null
+    },
+    "sourceMode.nonSRGB": {
+      "pass": true,
+      "expected": "fail",
+      "actual": "fail",
+      "evidence": {
+        "returncode": 65,
+        "stderr": [
+          "source.kind=srgb-pdf requires an embedded sRGB profile; found 'Generic RGB Profile'",
+          "Convert the artwork to sRGB and re-export, or start a new job with source.kind=figma."
+        ]
+      }
+    },
+    "geometry.directWrongSize": {
+      "pass": true,
+      "expected": "fail",
+      "actual": "fail",
+      "evidence": {
+        "returncode": 65,
+        "stderr": [
+          "non-uniform scale: sx=1.014287 sy=1.020202"
+        ]
+      }
+    },
+    "geometry.figmaScale": {
+      "pass": true,
+      "expected": "pass",
+      "actual": "pass",
+      "evidence": {
+        "returncode": 0
+      }
+    },
+    "independentRender.twoEngines": {
+      "pass": true,
+      "expected": "pass",
+      "actual": "pass",
+      "evidence": null
+    }
+  },
+  "counts": {
+    "checks": 27,
+    "pass": 27,
+    "fail": 0
+  }
+}
