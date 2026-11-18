@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """06-color-audit.py <job-id>
 
-Build a semantic sRGB -> FOGRA39 CMYK map from the actual source colours
-and the actual Ghostscript conversion path.
+Build a semantic sRGB -> delivery CMYK map from the actual source colours
+and the actual Ghostscript conversion path. The target is the ICC recorded in
+work/conversion.json, never a library constant.
 
 All Lab / ΔE00 values are ICC predictions (LittleCMS), not printed
 measurements. Brand tolerance is not asserted unless the print buyer
@@ -64,6 +65,9 @@ def main():
     icc_path, icc_sha = stable_icc(job_dir, prepare)
     target_path = conv["targetICC"]
     target_sha = conv["targetICCsha256"]
+    target_info = color.profile_info(target_path)
+    target_file_sha = hashlib.sha256(open(target_path, "rb").read()).hexdigest()
+    profile_binding_ok = target_file_sha == target_sha
     probe_args = list(conv["args"])
     # The cache must not depend on the job path. The ICC bytes are identical.
     fixed = []
@@ -227,7 +231,11 @@ def main():
         "target": {
             "icc": os.path.basename(target_path),
             "iccSha256": target_sha,
-            "condition": "Coated FOGRA39 (ISO 12647-2:2004)",
+            "iccFileSha256": target_file_sha,
+            "iccDescription": target_info.get("description"),
+            "matchesConversion": profile_binding_ok,
+            "recordedIn": "work/conversion.json",
+            "condition": target_info.get("description"),
         },
         "conversion": {
             "renderingIntent": conv["renderingIntent"],
@@ -236,7 +244,7 @@ def main():
             "overrideICC": conv["overrideICC"],
             "cmm": "LittleCMS (transicc)",
             "labReference": "D50, 2-degree observer, ICC PCS",
-            "note": "ICC prediction, not a physical measurement.",
+            "note": "ICC prediction, not a physical measurement. Target profile is the recorded conversion profile.",
         },
         "tolerance": {
             "deltaE00": tolerance,
@@ -271,15 +279,16 @@ def main():
     lines = [
         "# Color Mapping — %s" % job_id,
         "",
-        "sRGB: `%s` (%s) · CMYK: `Coated FOGRA39` (%s)" % (
+        "sRGB: `%s` (%s) · CMYK: `%s` (%s)" % (
             (prepare.get("sourceICC") or {}).get("description", "?"),
-            icc_sha[:16], target_sha[:16]),
+            icc_sha[:16], target_info.get("description") or os.path.basename(target_path),
+            target_sha[:16]),
         "",
         "Conversion: %s intent %d, BPC %s, OverrideICC %s. Delta E is an **ICC prediction, not a measurement on paper**." % (
             conv["renderingIntentName"], conv["renderingIntent"],
             conv["blackPointCompensation"], conv["overrideICC"]),
         "",
-        "| Meaning | HEX | RGB | FOGRA39 CMYK | TAC | Predicted ΔE00 | Control probe delta | PDF/AI count | Naming basis |",
+        "| Meaning | HEX | RGB | Delivery CMYK | TAC | Predicted ΔE00 | Control probe delta | PDF/AI count | Naming basis |",
         "|---|---|---|---|---:|---:|---:|---:|---|",
     ]
     for r in rows:

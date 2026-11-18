@@ -23,7 +23,7 @@ def payload(job, spec):
         brand = {}
     marks_path = os.path.join(ROOT, "config", "marks.json")
     target = (spec.get("print") or {}).get("iccProfile")
-    return {
+    payload = {
         "tacLimitPercent": job.get("tacLimitPercent", (spec.get("print") or {}).get("tacLimitPercent")),
         "pdfxStandard": job.get("pdfxStandard", (spec.get("print") or {}).get("pdfxStandard")),
         "bleedMm": job.get("bleedMm", (spec.get("print") or {}).get("bleedMm")),
@@ -36,6 +36,9 @@ def payload(job, spec):
         "brandMapSha256": _sha(brand_path),
         "marksSha256": _sha(marks_path),
     }
+    if job.get("fold"):
+        payload["fold"] = job["fold"]
+    return payload
 
 
 def digest(job, spec):

@@ -26,7 +26,6 @@ def _bin(env_key, name, fallback):
 TRANSICC = _bin("TRANSICC_BIN", "transicc", "/opt/homebrew/bin/transicc")
 GS = _bin("GS_BIN", "gs", "/opt/homebrew/bin/gs")
 SRGB = os.environ.get("SRGB_ICC") or "/System/Library/ColorSync/Profiles/sRGB Profile.icc"
-FOGRA39 = os.environ.get("FOGRA39_ICC") or "/Library/Application Support/Adobe/Color/Profiles/Recommended/CoatedFOGRA39.icc"
 
 
 def profile_info(path):
@@ -93,16 +92,21 @@ def rgb_to_cmyk(profile, colours, intent=1, bpc=True, dst_profile=None):
     """Predict sRGB -> CMYK under the conversion's target profile.
 
     dst_profile must be the ICC the conversion actually targeted
-    (prepare.conversion.targetICC). The module-level FOGRA39 path is only
-    a legacy default for callers that predate per-job targets.
+    (prepare.conversion.targetICC). There is no library default: a hard-coded
+    target silently predicts against the wrong profile after the delivery ICC
+    changes.
     """
-    return _transicc(profile, dst_profile or FOGRA39, "rgb", colours,
+    if not dst_profile:
+        raise ValueError("rgb_to_cmyk needs dst_profile from the recorded conversion")
+    return _transicc(profile, dst_profile, "rgb", colours,
                      intent=intent, bpc=bpc)
 
 
 def cmyk_to_lab(colours, intent=1, src_profile=None):
-    """Interpret CMYK numbers in src_profile (the conversion target)."""
-    return _transicc(src_profile or FOGRA39, "*Lab", "cmyk", colours,
+    """Interpret CMYK numbers in src_profile (the recorded conversion target)."""
+    if not src_profile:
+        raise ValueError("cmyk_to_lab needs src_profile from the recorded conversion")
+    return _transicc(src_profile, "*Lab", "cmyk", colours,
                      intent=intent, bpc=False)
 
 
