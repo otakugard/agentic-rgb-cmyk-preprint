@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """07-proof.py <job-id> [--dpi 150]
 
-Render the RGB source, the FOGRA39 CMYK intermediate and (when present)
+Render the RGB source, the delivery-ICC CMYK intermediate and (when present)
 the Illustrator production file. The CMYK→sRGB conversions are ICC
 simulations made with the same LittleCMS build Ghostscript uses.
 

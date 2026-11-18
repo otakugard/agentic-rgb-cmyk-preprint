@@ -274,9 +274,11 @@ def main():
                             ov, "%.1f mm on each side (±0.5)" % b,
                             "max deviation %.2f mm" % worst))
         prof = ai_res.get("colorProfileName") or ""
+        icc_name = spec["print"].get("iccName", "")
+        profile_match = bool(prof) and bool(icc_name) and icc_name.upper() in prof.upper()
         checks.append(check("ai.colorProfile", "Illustrator document profile",
-                            "pass" if "FOGRA39" in prof.upper() else "pending",
-                            prof or "not returned by ExtendScript", "Coated FOGRA39",
+                            "pass" if profile_match else "pending",
+                            prof or "not returned by ExtendScript", icc_name,
                             "28.4.1 exposes no reliable read; GUI check required"))
         # CMYK set: cmyk.pdf vs .ai PDF part
         if cmyk_path and ai_path and os.path.exists(cmyk_path) and os.path.exists(ai_path):

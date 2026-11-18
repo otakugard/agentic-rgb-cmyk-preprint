@@ -5,7 +5,7 @@
 # Accepted sources: a Figma PDF export, or an already laid-out sRGB PDF at final size.
 #
 # Why not use the Illustrator "Document Color Mode > CMYK" command:
-#   That command uses the current working CMYK space. That space is an environment setting, so another machine or another click can give a space other than FOGRA39.
+#   That command uses the current working CMYK space. That space is an environment setting, so another machine or another click can give a space other than the target ICC.
 #   Ghostscript plus ICC is explicit: the command names the profile, so the result is reproducible and checkable.
 #
 # Input: jobs/<id>/source/*.pdf (RGB source artwork, read-only)

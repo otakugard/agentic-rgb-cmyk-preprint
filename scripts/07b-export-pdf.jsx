@@ -141,7 +141,7 @@ try {
   o.bleedOffsetRect = [0, 0, 0, 0];
 
   /* COLORCONVERSIONTODEST and REPURPOSE can both trigger MRAP after an artboard change.
-     The artwork is already FOGRA39 CMYK, so export applies no colour conversion. 07c writes the
+     The artwork is already delivery-ICC CMYK, so export applies no colour conversion. 07c writes the
      ICC as /DefaultCMYK and the values stay unchanged. */
   o.colorConversionID = ColorConversion.None;
   o.colorDestinationID = ColorDestination.None;

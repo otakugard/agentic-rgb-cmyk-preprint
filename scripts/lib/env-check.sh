@@ -82,7 +82,7 @@ GS_BIN="$(spec_get ghostscript.binary)"
 if command -v "$GS_BIN" >/dev/null 2>&1; then
   ok "ghostscript" "$("$GS_BIN" --version 2>/dev/null | head -1)  (the only RGB to CMYK conversion point)"
 else
-  bad "ghostscript" "missing: $GS_BIN, FOGRA39 is not guaranteed without it"
+  bad "ghostscript" "missing: $GS_BIN, the target ICC conversion is not guaranteed without it"
 fi
 
 # 5. Write permissions
