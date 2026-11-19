@@ -36,6 +36,7 @@ This pipeline encodes the opposite rules:
 
 | Rule | Implementation |
 |---|---|
+| One colour owner | brand tuple, ICC paths and PDF/X target live in `config/color-contract.json` |
 | One conversion point | Ghostscript with explicit ICC, intent, BPC in `conversion.json` |
 | No colour repair in Illustrator | `02-import-convert.jsx` only handles geometry |
 | Evidence over claims | `gate3.json`, `qa.json`, SHA-256 binding for source, PDF, AI, config |
@@ -57,6 +58,7 @@ This pipeline encodes the opposite rules:
 | qpdf | 11+ | structural verification (recommended) |
 | MuPDF tools | 1.24+ | independent render check; missing it leaves the check PENDING |
 | ICC profiles | ISO Coated v2 300% (ECI) + sRGB | colour target |
+| Colour contract | `config/color-contract.json` | one canonical brand colour and its regions; every colour stage reads it |
 | Proof profiles | sRGB | soft proof, Gate 3 visual checks |
 
 The Python-only steps run on Linux and Windows. The `.jsx` steps and `run.sh`
@@ -92,10 +94,14 @@ source .venv/bin/activate
 pip install -r requirements.txt
 
 # 3. ICC profiles (either copy existing files or download them)
-#    Put them in color/profiles/ and edit config/print-spec.json → print.iccProfile
+#    Put them in color/profiles/; point config/color-contract.json → profiles at them
 ls "/Library/Application Support/Adobe/Color/Profiles/Recommended/"
 
-# 4. verify the environment
+# 4. colour contract (one per brand/job; never commit client values)
+cp config/color-contract.example.json config/color-contract.json
+$EDITOR config/color-contract.json   # brand hex, CMYK tuple, regions, ICC hashes
+
+# 5. verify the environment
 ./install/verify.sh
 ```
 
@@ -106,9 +112,31 @@ cd agentic-rgb-cmyk-preprint
 source .venv/bin/activate
 ```
 
-`install/verify.sh` checks Illustrator, Ghostscript, Python deps, the ICC file,
-config parsing, and tool availability. Add `--full` to also run the negative
-preflight fixture, which writes only its result file.
+`install/verify.sh` checks Illustrator, Ghostscript, Python deps, the ICC files,
+the colour contract, config parsing, and tool availability. Add `--full` to also
+run the negative preflight fixture, which writes only its result file.
+
+### One colour contract
+
+`config/color-contract.json` is the only place that defines the brand colour.
+Conversion, audit, finalize, Gate 3 and the report read it; the scripts carry no
+fallback tuple or profile hash. The file is git-ignored because it can contain
+client values. Start from `config/color-contract.example.json`.
+
+```jsonc
+{
+  "brandColor": "BRAND_GREEN",
+  "colors": { "BRAND_GREEN": { "figma": {"rgbHex": "#A2BC97"},
+                               "cmyk": {"percent": [40.0, 10.6, 45.1, 5.1],
+                                        "bytes8": [102, 27, 115, 13]},
+                               "regions": [ /* Figma node -> paint node */ ] } },
+  "profiles": { "source": {}, "target": {}, "renderRGB": {} }
+}
+```
+
+A contract that names another target ICC, another source profile, or a
+different brand tuple is a hard error, not a warning. `08-gate3.py` fails when a
+declared region is missing, duplicated, or covered by an undeclared green.
 
 ### First job: an existing sRGB PDF
 
@@ -217,7 +245,7 @@ See [`docs/pipeline.md`](docs/pipeline.md) for inputs, outputs, and rerun rules.
 |---|---|---|
 | Gate 1 | Is the source unchanged and correctly interpreted? | source hash, sRGB copy, palette, size; Figma node snapshot or direct-PDF source evidence |
 | Gate 2 | Did the conversion preserve the approved artwork? | CMYK tuples, visible proof, bleed, structure |
-| Gate 3 | Is the candidate PDF structurally printable? | OutputIntent, boxes, bleed content, no RGB, fonts, TAC, marks, ICC chain, stored ink, independent render, optional fold |
+| Gate 3 | Is the candidate PDF structurally printable? | OutputIntent, boxes, bleed content, no RGB, fonts, TAC, marks, no `/DefaultCMYK`, brand-colour regions, managed separations, independent render, optional fold |
 
 Gate 2 PASS covers conversion integrity; approval is the print shop's decision.
 Gate 3 PASS covers output structure; shop acceptance, contract proof, and press
@@ -256,7 +284,8 @@ Known limits and tested failures: [`docs/limitations.md`](docs/limitations.md).
 ## Layout
 
 ```
-config/print-spec.json     parameters (single source of truth)
+config/print-spec.json     print parameters (mirror; colour identity comes from the contract)
+config/color-contract.example.json  template for config/color-contract.json
 config/marks.json          trim marks
 color/brand-map.json       optional colour vocabulary
 color/profiles/            your ICC files (not shipped)

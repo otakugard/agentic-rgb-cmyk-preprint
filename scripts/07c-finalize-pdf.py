@@ -5,14 +5,14 @@ Turn the approved CMYK intermediate (work/cmyk-final.pdf) into the delivery
 candidate:
 
   - page MediaBox/CropBox = trim + 2 x margin (default 14 mm)
-  - TrimBox = trim, BleedBox = trim + 3 mm, ArtBox = TrimBox
+  - TrimBox = trim, BleedBox = trim + 3 mm; do not write ArtBox
   - place the 303x216 bleed artwork at BleedBox
   - draw the jp-double mark set (Japanese double tombo + centre crosses),
     offset 3 mm, 0.3 pt registration lines, no colour bars
-  - add the delivery ICC (spec.print.iccProfile) as /DefaultCMYK in page
-    resources AND as the DestOutputProfile of a GTS_PDFX OutputIntent
-  - write PDF/X-4:2010 identification: Info /GTS_PDFXVersion + /Trapped,
-    XMP Metadata (pdfxid:GTS_PDFXVersion, dc:title, pdf:Producer)
+  - add one GTS_PDFX OutputIntent whose DestOutputProfile is the contract
+    target ICC; do NOT add /DefaultCMYK (single OutputIntent policy)
+  - write PDF/X-4 (ISO 15930-7:2010) identification: Info /GTS_PDFXVersion
+    + /Trapped, XMP (pdfxid:GTS_PDFXVersion, dc:title, pdf:Producer)
   - bind the artwork, final PDF and ICC hashes in work/pdf-finalize.json
 
 The raw Illustrator export is no longer merged: its marks are US-style single
@@ -25,6 +25,7 @@ import json
 import os
 import re
 import sys
+import uuid
 from datetime import datetime
 
 try:
@@ -40,6 +41,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 sys.path.insert(0, os.path.join(HERE, "lib"))
 import marks as markslib  # noqa: E402
+import contract as colorcontract  # noqa: E402
 
 
 def load(path, default=None):
@@ -67,6 +69,44 @@ def box_mm(box):
             round((box[3] - box[1]) * 25.4 / 72, 3)]
 
 
+def defaultcmyk_scopes(path):
+    """Return page/Form scopes that declare /DefaultCMYK (must be empty)."""
+    reader = PdfReader(path)
+    page = reader.pages[0]
+    found = []
+    res = page.get("/Resources")
+    res = res.get_object() if res is not None else {}
+    cs = res.get("/ColorSpace")
+    cs = cs.get_object() if hasattr(cs, "get_object") else (cs or {})
+    if "DefaultCMYK" in cs:
+        found.append("page")
+    seen = set()
+
+    def walk(resources, label):
+        xo = (resources or {}).get("/XObject")
+        xo = xo.get_object() if hasattr(xo, "get_object") else (xo or {})
+        for name, ref in xo.items():
+            obj = ref.get_object()
+            if id(obj) in seen:
+                continue
+            seen.add(id(obj))
+            if str(obj.get("/Subtype")) != "/Form":
+                continue
+            fres = obj.get("/Resources")
+            if fres is not None:
+                fres = fres.get_object()
+                fcs = fres.get("/ColorSpace")
+                fcs = fcs.get_object() if hasattr(fcs, "get_object") else (fcs or {})
+                if "DefaultCMYK" in fcs:
+                    found.append("%s/%s" % (label, name))
+                walk(fres, "%s/%s" % (label, name))
+            else:
+                walk(resources, "%s/%s" % (label, name))
+
+    walk(res, "page")
+    return found
+
+
 def main():
     if len(sys.argv) != 2:
         print("usage: 07c-finalize-pdf.py <job-id>", file=sys.stderr)
@@ -78,6 +118,30 @@ def main():
     if not job or not spec:
         print("missing job.json or print-spec.json", file=sys.stderr)
         return 66
+    try:
+        color_contract = colorcontract.load()
+        target_icc_path, target_icc = colorcontract.profile(color_contract, "target")
+        spec = colorcontract.apply_to_spec(spec, color_contract)
+    except Exception as exc:  # noqa: BLE001
+        print("colour contract error: %s" % exc, file=sys.stderr)
+        return 78
+    contract_sha = colorcontract.contract_sha(color_contract)
+    conv_path = os.path.join(job_dir, "work", "conversion.json")
+    conv = load(conv_path) or {}
+    if not conv:
+        print("missing work/conversion.json; run 01-prepare first", file=sys.stderr)
+        return 66
+    recorded_sha = conv.get("targetICCsha256")
+    if recorded_sha != target_icc["sha256"]:
+        print("recorded conversion target ICC %s does not match contract %s"
+              % (recorded_sha, target_icc["sha256"]), file=sys.stderr)
+        return 65
+    recorded_source = conv.get("sourceICCsha256")
+    source_sha = color_contract["profiles"]["source"]["sha256"]
+    if recorded_source != source_sha:
+        print("recorded source ICC %s does not match contract %s"
+              % (recorded_source, source_sha), file=sys.stderr)
+        return 65
 
     exp = job.get("pdfExport") or {}
     file_name = exp.get("fileName") or ""
@@ -91,6 +155,12 @@ def main():
         return 66
     if os.path.realpath(base_path) == os.path.realpath(out):
         print("base PDF and final PDF are the same path", file=sys.stderr)
+        return 65
+    inherited_dcm = defaultcmyk_scopes(base_path)
+    if inherited_dcm:
+        print("base PDF still declares /DefaultCMYK in: %s" % inherited_dcm, file=sys.stderr)
+        print("PDF/X-4 must keep DeviceCMYK under one OutputIntent; remove the default space first.",
+              file=sys.stderr)
         return 65
 
     trim = job.get("trim") or {}
@@ -169,37 +239,45 @@ def main():
     page[NameObject("/CropBox")] = box
     page[NameObject("/TrimBox")] = trim_box
     page[NameObject("/BleedBox")] = bleed_box
-    page[NameObject("/ArtBox")] = trim_box
+    # PDF/X requires exactly one of TrimBox or ArtBox. Keep TrimBox; do not
+    # write ArtBox (ISO 15930-7 §6.12).
+    page.pop(NameObject("/ArtBox"), None)
 
-    # PDF/X-4:2010 (spec.print.pdfxStandard): one embedded ICC shared by
-    # /DefaultCMYK and the GTS_PDFX OutputIntent's DestOutputProfile.
-    icc_path = spec["print"]["iccProfile"]
-    icc_bytes = open(icc_path, "rb").read()
+    # PDF/X-4: one embedded CMYK OutputIntent. DeviceCMYK artwork stays
+    # device CMYK and is interpreted through this OutputIntent. Do NOT write
+    # /DefaultCMYK: PDF/X-4 does not require it, and an ICCBased CMYK default
+    # space carrying the same profile re-maps bare k at the reader (RCA
+    # 2026-11-16). This workflow excludes it by policy.
+    icc_bytes = open(target_icc_path, "rb").read()
     icc_sha = hashlib.sha256(icc_bytes).hexdigest()
+    if icc_sha != target_icc["sha256"]:
+        print("target ICC changed while finalizing", file=sys.stderr)
+        return 65
     icc = DecodedStreamObject()
     icc.set_data(icc_bytes)
     icc[NameObject("/N")] = NumberObject(4)
-    icc[NameObject("/Alternate")] = NameObject("/DeviceCMYK")
     icc_ref = writer._add_object(icc)
-    # /DefaultCMYK must be a colour space: [/ICCBased <stream>].
-    cs[NameObject("/DefaultCMYK")] = ArrayObject([NameObject("/ICCBased"), icc_ref])
 
+    pdfx_standard = color_contract["pdf"]["standard"]
     _contracts = {"pdfx-4-2010": "PDF/X-4:2010", "pdfx-4": "PDF/X-4",
                   "pdfx-3-2003": "PDF/X-3:2003", "pdfx-1a-2003": "PDF/X-1a:2003"}
-    _contract = str(exp.get("contract") or "").strip().lower()
-    pdfx_standard = (_contracts.get(_contract)
-                     or job.get("pdfxStandard")
-                     or spec["print"].get("pdfxStandard", "PDF/X-4:2010"))
-    ocid = spec["print"].get("outputConditionID", "ISO Coated v2 300% (ECI)")
-    oc = spec["print"].get("outputCondition", ocid)
+    _job_contract = str(exp.get("contract") or "").strip().lower()
+    if (_job_contract in _contracts
+            and _contracts[_job_contract].split(":")[0] != pdfx_standard.split(":")[0]):
+        print("job.pdfExport.contract=%r disagrees with the colour contract (%s)"
+              % (exp.get("contract"), pdfx_standard), file=sys.stderr)
+        return 65
+    ocid = target_icc["outputConditionIdentifier"]
+    oc = target_icc["outputCondition"]
+    registry = target_icc["registryName"]
     intent = DictionaryObject()
     intent[NameObject("/Type")] = NameObject("/OutputIntent")
     intent[NameObject("/S")] = NameObject("/GTS_PDFX")
     intent[NameObject("/OutputConditionIdentifier")] = TextStringObject(ocid)
     intent[NameObject("/OutputCondition")] = TextStringObject(oc)
-    intent[NameObject("/RegistryName")] = TextStringObject("http://www.color.org")
+    intent[NameObject("/RegistryName")] = TextStringObject(registry)
     intent[NameObject("/DestOutputProfile")] = icc_ref
-    intent[NameObject("/Info")] = TextStringObject(ocid)
+    intent[NameObject("/Info")] = TextStringObject(target_icc["description"])
     writer._root_object[NameObject("/OutputIntents")] = ArrayObject([intent])
 
     now = datetime.now().astimezone()
@@ -210,9 +288,11 @@ def main():
                 + off[:3] + ":" + off[3:5])
     title = file_name[:-4]
     producer = "07c-finalize-pdf.py (pypdf)"
-    # Do not name an Illustrator version here: this script never runs
-    # Illustrator, and the artwork may come from any supported release.
-    creator = "Adobe Illustrator"
+    # Name the tool, not an application: this script never runs Illustrator,
+    # and the artwork may come from any supported release or an sRGB PDF.
+    creator = "07c-finalize-pdf.py (pypdf)"
+    document_id = "uuid:" + str(uuid.uuid4())
+    instance_id = "uuid:" + str(uuid.uuid4())
     xmp = ('<?xpacket begin="\ufeff" id="W5M0MpCehiHzreSzNTczkc9d"?>\n'
            '<x:xmpmeta xmlns:x="adobe:ns:meta/">\n'
            ' <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">\n'
@@ -220,22 +300,27 @@ def main():
            '    xmlns:dc="http://purl.org/dc/elements/1.1/"\n'
            '    xmlns:pdf="http://ns.adobe.com/pdf/1.3/"\n'
            '    xmlns:xmp="http://ns.adobe.com/xap/1.0/"\n'
-           '    xmlns:pdfx="http://ns.adobe.com/pdfx/1.3/"\n'
+           '    xmlns:xmpMM="http://ns.adobe.com/xap/1.0/mm/"\n'
            '    xmlns:pdfxid="http://www.npes.org/pdfx/ns/id/">\n'
            '   <dc:format>application/pdf</dc:format>\n'
            '   <dc:title><rdf:Alt><rdf:li xml:lang="x-default">%s</rdf:li></rdf:Alt></dc:title>\n'
            '   <pdf:Producer>%s</pdf:Producer>\n'
+           '   <pdf:Trapped>False</pdf:Trapped>\n'
            '   <xmp:CreatorTool>%s</xmp:CreatorTool>\n'
            '   <xmp:CreateDate>%s</xmp:CreateDate>\n'
            '   <xmp:ModifyDate>%s</xmp:ModifyDate>\n'
-           '   <pdfx:PDFXStandard>PDF/X</pdfx:PDFXStandard>\n'
-           '   <pdfx:PDFXVersion>%s</pdfx:PDFXVersion>\n'
+           '   <xmp:MetadataDate>%s</xmp:MetadataDate>\n'
+           '   <xmpMM:DocumentID>%s</xmpMM:DocumentID>\n'
+           '   <xmpMM:InstanceID>%s</xmpMM:InstanceID>\n'
+           '   <xmpMM:VersionID>1</xmpMM:VersionID>\n'
+           '   <xmpMM:RenditionClass>default</xmpMM:RenditionClass>\n'
            '   <pdfxid:GTS_PDFXVersion>%s</pdfxid:GTS_PDFXVersion>\n'
            '  </rdf:Description>\n'
            ' </rdf:RDF>\n'
            '</x:xmpmeta>\n'
            '<?xpacket end="w"?>\n' % (title, producer, creator, xmp_date, xmp_date,
-                                      pdfx_standard, pdfx_standard))
+                                      xmp_date, document_id, instance_id,
+                                      pdfx_standard))
     xmp_stream = DecodedStreamObject()
     xmp_stream.set_data(xmp.encode("utf-8"))
     xmp_stream[NameObject("/Type")] = NameObject("/Metadata")
@@ -247,10 +332,14 @@ def main():
         "/Creator": creator,
         "/Producer": producer,
         "/GTS_PDFXVersion": pdfx_standard,
-        "/Trapped": "/False",
         "/CreationDate": info_date,
         "/ModDate": info_date,
     })
+    # /Trapped must be a PDF name, not a string. The XMP pdf:Trapped value
+    # above is the same fact.
+    info = writer._info.get_object()
+    info[NameObject("/Trapped")] = NameObject("/False")
+    info[NameObject("/GTS_PDFXVersion")] = TextStringObject(pdfx_standard)
 
     try:
         writer.compress_identical_objects(remove_duplicates=True, remove_unreferenced=True)
@@ -259,9 +348,17 @@ def main():
     except Exception:
         pass
 
+    # PDF/X-4 requires a trailer /ID. pypdf writes one only when asked.
+    writer.generate_file_identifiers()
+
     tmp = out + ".tmp"
     writer.write(tmp)
     os.replace(tmp, out)
+    out_dcm = defaultcmyk_scopes(out)
+    if out_dcm:
+        os.unlink(out)
+        print("final PDF still declares /DefaultCMYK in: %s" % out_dcm, file=sys.stderr)
+        return 65
 
     # output.pdf (consumed by 08/04) must follow pdfExport.fileName (07c's
     # input). Two sources of truth caused a stale gate3 binding once; keep
@@ -278,37 +375,53 @@ def main():
         v = p.get("/" + k)
         if v is not None:
             boxes[k] = [round(float(x), 6) for x in v]
+    trailer_id = final.trailer.get("/ID")
     report = {
         "ok": True,
         "step": "07c-finalize-pdf",
         "contract": "pdfx-standard-" + pdfx_standard.lower().replace("/", "").replace(":", "-"),
         "pdfxStandard": pdfx_standard,
+        "pdfxStandardRevision": color_contract["pdf"]["standardRevision"],
+        "colorContract": color_contract["contractId"],
+        "colorContractSha256": contract_sha,
         "outputConditionIdentifier": ocid,
+        "outputCondition": oc,
+        "registryName": registry,
         "fileName": file_name,
         "basePdf": "work/cmyk-final.pdf",
         "basePdfSha256": sha(base_path),
         "output": file_name,
         "outputSha256": sha(out),
         "ai": job.get("output", {}).get("ai"),
-        "aiSha256": sha(os.path.join(job_dir, job["output"]["ai"])),
+        "aiSha256": (sha(os.path.join(job_dir, job["output"]["ai"]))
+                     if job.get("output", {}).get("ai")
+                     and os.path.exists(os.path.join(job_dir, job["output"]["ai"])) else None),
         "boxesPt": boxes,
         "pageMm": box_mm(boxes["MediaBox"]),
         "trimMm": box_mm(boxes["TrimBox"]),
         "bleedMm": box_mm(boxes["BleedBox"]),
+        "artBox": "/ArtBox" in boxes,
         "pageCount": len(final.pages),
-        "iccPath": icc_path,
+        "iccPath": target_icc_path,
         "iccSha256": icc_sha,
-        "iccDefaultCMYK": True,
+        "iccDefaultCMYK": False,
+        "defaultCMYK": False,
+        "inheritedDefaultCMYKScopes": [],
         "outputIntent": 1,
-        "outputIntentSubtype": "GTS_PDFX",
+        "outputIntentSubtype": "/GTS_PDFX",
+        "trailerId": bool(trailer_id),
+        "xmpDocumentId": document_id,
+        "xmpInstanceId": instance_id,
+        "trapped": "False",
         "marksStyle": mcfg["style"],
         "marksSource": source,
         "marksOffsetMm": float(mcfg["offsetMm"]),
         "marksOuterMm": float(mcfg["outerMm"]),
         "marksLineWidthPt": float(mcfg["lineWidthPt"]),
         "colorBars": bool(mcfg["colorBars"]),
-        "note": ("PDF/X-4:2010: ICC as /DefaultCMYK + GTS_PDFX OutputIntent "
-                 "with DestOutputProfile; XMP pdfxid:GTS_PDFXVersion written."),
+        "note": ("PDF/X-4 (ISO 15930-7:2010): one GTS_PDFX OutputIntent with "
+                 "DestOutputProfile; DeviceCMYK artwork; no /DefaultCMYK; "
+                 "XMP pdfxid:GTS_PDFXVersion=PDF/X-4; trailer /ID present."),
     }
     report_path = os.path.join(job_dir, "work", "pdf-finalize.json")
     with open(report_path, "w", encoding="utf-8") as fh:

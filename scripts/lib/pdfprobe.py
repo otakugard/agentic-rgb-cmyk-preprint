@@ -408,6 +408,34 @@ def _cs_kind(objs, blob):
     return "unknown"
 
 
+def _pdf_text(value):
+    """Decode a PDF literal-string byte sequence (octal escapes included)."""
+    if value is None:
+        return None
+    out = bytearray()
+    i = 0
+    while i < len(value):
+        ch = value[i]
+        if ch == 0x5C and i + 1 < len(value):
+            nxt = value[i + 1]
+            if 0x30 <= nxt <= 0x37:
+                digits = bytearray()
+                j = i + 1
+                while j < len(value) and len(digits) < 3 and 0x30 <= value[j] <= 0x37:
+                    digits.append(value[j])
+                    j += 1
+                out.append(int(digits.decode("ascii"), 8) & 0xFF)
+                i = j
+                continue
+            mapping = {0x6E: 10, 0x72: 13, 0x74: 9, 0x62: 8, 0x66: 12}
+            out.append(mapping.get(nxt, nxt))
+            i += 2
+            continue
+        out.append(ch)
+        i += 1
+    return out.decode("latin1", "replace")
+
+
 def output_intents(path):
     """Follow Catalog -> /OutputIntents -> /DestOutputProfile."""
     raw = open(path, "rb").read()
@@ -433,12 +461,16 @@ def output_intents(path):
         d = dm.group(1)
         dest = re.search(rb"/DestOutputProfile\s+(\d+)\s+0\s+R", d)
         cond = re.search(rb"/OutputConditionIdentifier\s*\(([^)]*)\)", d)
+        reg = re.search(rb"/RegistryName\s*\(([^)]*)\)", d)
+        info = re.search(rb"/Info\s*\(([^)]*)\)", d)
         subtype = re.search(rb"/S\s*/([A-Za-z0-9_]+)", d)
         dest_ref = int(dest.group(1)) if dest else None
         prof = profile_by_ref(objs, dest_ref) if dest_ref else None
         out.append({
             "subtype": ("/" + subtype.group(1).decode("latin1")) if subtype else None,
-            "condition": cond.group(1).decode("latin1", "replace") if cond else None,
+            "condition": _pdf_text(cond.group(1)) if cond else None,
+            "registry": _pdf_text(reg.group(1)) if reg else None,
+            "info": _pdf_text(info.group(1)) if info else None,
             "destProfile": ({k: prof[k] for k in ("description", "space", "sha256", "isRGB", "isCMYK")}
                             if prof else None),
         })

@@ -16,6 +16,7 @@ import sys
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, "lib"))
 import pdfprobe  # noqa: E402
+import contract as colorcontract  # noqa: E402
 
 
 def main():
@@ -47,6 +48,17 @@ def main():
         with open(os.path.join(work, "source-icc-cmyk.icc"), "wb") as fh:
             fh.write(cmyk_profiles[0]["data"])
 
+    try:
+        color_contract = colorcontract.load()
+        source_profile = colorcontract.profile(color_contract, "source")[1]
+        expected_rgb_sha = source_profile["sha256"]
+        contract_sha = colorcontract.contract_sha(color_contract)
+    except Exception as exc:  # noqa: BLE001
+        print("colour contract error: %s" % exc, file=sys.stderr)
+        return 78
+    rgb_shas = sorted({p.get("sha256") for p in rgb_profiles if p.get("sha256")})
+    source_identity_ok = (len(rgb_shas) == 1 and rgb_shas[0] == expected_rgb_sha)
+
     has_cmyk = (structure["deviceCMYK"] > 0 or bool(cmyk_profiles)
                 or any(c.get("space") == "cmyk" for c in colours))
     has_rgb = structure["deviceRGB"] > 0 or bool(rgb_profiles)
@@ -62,7 +74,7 @@ def main():
         kind = "unknown"
 
     payload = {
-        "ok": kind == "rgb-icc" and not has_cmyk,
+        "ok": kind == "rgb-icc" and not has_cmyk and source_identity_ok,
         "step": "01a-source-audit",
         "source": os.path.basename(src),
         "sourceSha256": hashlib.sha256(raw).hexdigest(),
@@ -73,6 +85,14 @@ def main():
         "kind": kind,
         "hasRGB": has_rgb,
         "hasCMYK": has_cmyk,
+        "colorContract": color_contract["contractId"],
+        "colorContractSha256": contract_sha,
+        "sourceICCidentity": {
+            "ok": source_identity_ok,
+            "expectedSha256": expected_rgb_sha,
+            "embeddedRgbSha256": rgb_shas,
+            "policy": source_profile["policy"],
+        },
         "icc": ({k: v for k, v in rgb_profiles[0].items() if k != "data"}
                 if rgb_profiles else None),
         "iccPath": os.path.relpath(icc_path, os.path.dirname(work)) if icc_path else None,
@@ -91,12 +111,16 @@ def main():
         "ok": payload["ok"], "kind": kind, "pages": payload["pages"],
         "icc": (payload["icc"] or {}).get("description"),
         "iccSha256": (payload["icc"] or {}).get("sha256"),
+        "sourceICCidentity": payload["sourceICCidentity"],
         "hasCMYK": has_cmyk, "colours": len(colours),
         "vectorMaxTac": payload["vectorMaxTac"],
     }, ensure_ascii=False))
     if payload["pages"] != 1:
         return 65
     if kind != "rgb-icc":
+        return 65
+    if not source_identity_ok:
+        print("source embedded RGB ICC is not the contract sRGB2014 profile", file=sys.stderr)
         return 65
     return 0
 

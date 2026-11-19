@@ -41,16 +41,21 @@ python -m pip install --quiet -r requirements.txt
 
 say "ICC"
 ICC="$(python - <<'PY'
-import json
-spec = json.load(open("config/print-spec.json", encoding="utf-8"))
-print(spec.get("print", {}).get("iccProfile", ""))
+import os, sys
+sys.path.insert(0, "scripts/lib")
+try:
+    import contract
+    print(contract.profile(contract.load(), "target")[0])
+except Exception:
+    spec = json.load(open("config/print-spec.json", encoding="utf-8"))
+    print(spec.get("print", {}).get("iccProfile", ""))
 PY
 )"
 if [ -f "$ICC" ]; then
   echo "ok: $ICC"
 else
   echo "missing: $ICC"
-  echo "Install an ISO Coated v2 300% (ECI) profile and set print.iccProfile."
+  echo "Install an ISO Coated v2 300% (ECI) profile and point the colour contract at it."
   echo "See color/profiles/README.md. Then run ./install/install.sh again."
 fi
 

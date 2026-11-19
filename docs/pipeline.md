@@ -53,6 +53,9 @@ unopenable.
 - `scaleInPdf: true` makes `02` import `cmyk-final.pdf`. `01d` always runs and
   always writes `cmyk-final.pdf`; `07c` reads only that file.
 - `pdfExport.fileName` is required by `07c`. `marginMm` defaults to 14.
+- `pdfExport.contract` is validated against `color-contract.json` →
+  `pdf.standard`; it cannot override the contract. A different family stops the
+  step.
 - Leave `tacLimitPercent` and `pdfxStandard` null until the print shop confirms,
   or set them explicitly for this job.
 - `source.sha256` is optional at creation; the first `01` run records it.
@@ -131,9 +134,11 @@ Pixel differences locate problems; they are not DeltaE00 data.
 
 Builds the candidate PDF from `work/cmyk-final.pdf`: trim/bleed boxes, Japanese
 double-line marks and cross marks from `config/marks.json` (stroked in
-`/Separation /All` 100%), `/DefaultCMYK` and
-the GTS_PDFX OutputIntent with the delivery ICC, XMP `GTS_PDFXVersion`, and
-Info `/GTS_PDFXVersion` + `/Trapped`.
+`/Separation /All` 100%), one GTS_PDFX OutputIntent with the contract target
+ICC, XMP `GTS_PDFXVersion` + dates + document IDs + `pdf:Trapped`, Info
+`/GTS_PDFXVersion` + `/Trapped`, and a trailer `/ID`. It writes **no
+`/DefaultCMYK`**: PDF/X-4 does not require it, and an ICCBased CMYK default
+space is a reader-dependent re-separation hazard.
 
 `07c` builds the PDF itself. Illustrator 28.4.1 hangs on the PDF/X dialog when
 driven by AppleScript.
@@ -142,9 +147,11 @@ driven by AppleScript.
 
 Checks the candidate PDF. Writes `gate3.json` bound to the PDF hash, the AI
 hash, and an acceptance hash over the parameters that produced the result.
-The gate covers the original structure checks plus `/DefaultCMYK`, the ICC
-binding chain, inherited colour spaces, stored ink versus rendered plates, two
-independent renderers, and an optional fold declaration.
+The gate covers the original structure checks plus the absence of
+`/DefaultCMYK`, the contract/conversion/OutputIntent chain, inherited colour
+spaces, stored ink, declared brand-colour regions, region-sampled managed
+separations with a different-profile control, two independent renderers, and an
+optional fold declaration.
 
 `--selftest` runs the same checks against `work/cmyk.pdf` (not a delivery PDF)
 and writes `gate3-selftest.json`. The fixture must FAIL; that proves the checker
@@ -161,7 +168,8 @@ ICC, config, intermediate, AI, and PDF hashes.
 | Changed | Rerun |
 |---|---|
 | `source/` | 01, 01b, 01d, 02, 03, 05, 06, 07, 07c, 08, 04 |
-| `print-spec.json` conversion fields (ICC, intent, BPC, image encoding) | 01, 01d, 02, 03, 05, 06, 07, 07c, 08, 04 |
+| `color-contract.json` (brand tuple, ICC paths/hashes, intent, PDF/X) | 01, 01a, 05, 06, 07, 07c, 08, 04; a contract hash mismatch stops the step |
+| `print-spec.json` conversion fields (mirror; must agree with the contract) | 01, 01d, 02, 03, 05, 06, 07, 07c, 08, 04 |
 | other `print-spec.json` fields (trim, bleed, PDF/X) | 01d, 02, 03, 05, 06, 07, 07c, 08, 04 |
 | `cmyk.pdf` (including `10`) | 01d, 02, 03, 05, 06, 07, 07c, 08, 04 |
 | `cmyk-final.pdf` (overprint, flattening) | 02, 03, 07, 07c, 08, 04 |

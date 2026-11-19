@@ -91,10 +91,10 @@ def rgb_to_lab(profile, colours, intent=1):
 def rgb_to_cmyk(profile, colours, intent=1, bpc=True, dst_profile=None):
     """Predict sRGB -> CMYK under the conversion's target profile.
 
-    dst_profile must be the ICC the conversion actually targeted
-    (prepare.conversion.targetICC). There is no library default: a hard-coded
-    target silently predicts against the wrong profile after the delivery ICC
-    changes.
+    dst_profile must be the ICC the conversion actually targeted, read from
+    work/conversion.json (prepare.conversion.targetICC). There is no library
+    default: a hard-coded target silently predicts against the wrong profile
+    after the delivery ICC changes.
     """
     if not dst_profile:
         raise ValueError("rgb_to_cmyk needs dst_profile from the recorded conversion")

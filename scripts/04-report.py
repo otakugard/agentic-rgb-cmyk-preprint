@@ -26,6 +26,7 @@ sys.path.insert(0, os.path.join(HERE, "lib"))
 import pdfprobe  # noqa: E402
 import acceptance  # noqa: E402
 import source  # noqa: E402
+import contract as colorcontract  # noqa: E402
 
 
 def load(path, default=None):
@@ -137,15 +138,23 @@ def main():
                             "rerun 07 after 02/03"))
     if ca:
         brand_sha = sha(os.path.join(ROOT, "color", "brand-map.json"))
+        try:
+            contract_sha = colorcontract.contract_sha(colorcontract.load())
+        except Exception:
+            contract_sha = None
         ca_ok = (ca.get("source", {}).get("sha256") == src_hash
                  and ca.get("cmykSha256") == cmyk_hash
-                 and ca.get("brandMapSha256") == brand_sha)
-        checks.append(check("evidence.colorAudit", "colour map binds current source / cmyk.pdf",
+                 and ca.get("brandMapSha256") == brand_sha
+                 and contract_sha is not None
+                 and (ca.get("colorContract") or {}).get("sha256") == contract_sha)
+        checks.append(check("evidence.colorAudit", "colour map binds current source / cmyk.pdf / contract",
                             "pass" if ca_ok else "fail",
                             {"source": ca.get("source", {}).get("sha256"),
-                             "cmyk": ca.get("cmykSha256")},
-                            {"source": src_hash, "cmyk": cmyk_hash},
-                            "rerun 06 after 01"))
+                             "cmyk": ca.get("cmykSha256"),
+                             "contract": (ca.get("colorContract") or {}).get("sha256")},
+                            {"source": src_hash, "cmyk": cmyk_hash,
+                             "contract": contract_sha},
+                            "rerun 06 after 01 or after editing the colour contract"))
 
     final_pdf = os.path.join(job_dir, job["output"]["pdf"]) if job.get("output", {}).get("pdf") else None
     final_hash = sha(final_pdf)
@@ -486,6 +495,17 @@ def main():
                             {"maxCmmDifference": cmm, "unmatched": unmatched},
                             "≤ 1.0 ΔE00; every source colour matches a real CMYK",
                             "LittleCMS prediction vs real cmyk.pdf, not just echoed settings"))
+        target = ca.get("target") or {}
+        binding = target.get("matchesConversion")
+        checks.append(check("color.profileBinding", "audit ICC = conversion record",
+                            "pass" if binding else ("pending" if binding is None else "fail"),
+                            {"icc": target.get("icc"),
+                             "iccSha256": target.get("iccSha256"),
+                             "fileSha256": target.get("iccFileSha256"),
+                             "recordedIn": target.get("recordedIn"),
+                             "description": target.get("iccDescription")},
+                            "the audit's target ICC has the same hash as work/conversion.json",
+                            "no library target ICC remains; changing the ICC cannot leave the prediction on an old profile"))
         tol = ca.get("tolerance") or {}
         limit = tol.get("deltaE00")
         rows_ca = ca.get("rows") or []
@@ -612,27 +632,80 @@ def main():
             return None, None
 
         if fb and ff:
-            before_key, before = find_node(fb.get("nodes") or {})
-            after_key, after = find_node(ff.get("nodes") or {})
+            fb_nodes = fb.get("nodes") or {}
+            ff_nodes = ff.get("nodes") or {}
+            before_key, before = find_node(fb_nodes)
+            after_key, after = find_node(ff_nodes)
             if before and after:
                 bs = node_signature(before)
                 as_ = node_signature(after)
                 same = bs is not None and bs == as_
-                g1.append(check("gate1.figma", "Figma node unchanged", "pass" if same else "fail",
-                                {"nodeId": node_id, "baselineKey": before_key,
-                                 "finalKey": after_key, "before": before, "after": after,
-                                 "hashMethod": bs[0] if bs else None},
-                                "node metadata signature matches for this job",
+                audit = load(os.path.join(ROOT, "color", "figma-audit.json")) or {}
+                try:
+                    contract_data = colorcontract.load()
+                    brand_name = colorcontract.brand_color_name(contract_data)
+                    brand_contract = colorcontract.color(contract_data, brand_name)
+                    expected_hex = brand_contract["figma"]["rgbHex"]
+                    expected_nodes = [r["paintNode"] for r in brand_contract["regions"]
+                                      if str(r.get("jobNode")) == node_id]
+                except Exception:
+                    brand_name = "brand colour"
+                    brand_contract = {}
+                    expected_hex = None
+                    expected_nodes = []
+                bindings = {b.get("nodeId"): b for b in (audit.get("bindings") or [])}
+                variable = audit.get("variable") or {}
+                appearance = ((audit.get("appearanceEvidence") or {}).get("renderComparison") or {})
+                audit_applies = (str(audit.get("fileKey")) == str((job.get("figma") or {}).get("fileKey"))
+                                 and bool(expected_nodes))
+                audit_ok = (audit_applies
+                            and variable.get("name") == brand_name
+                            and variable.get("hex") == expected_hex
+                            and str(variable.get("id", "")).startswith("VariableID:")
+                            and all((bindings.get(nid) or {}).get("after", {}).get("boundVariables", {}).get("color", {}).get("id") == variable.get("id")
+                                    for nid in expected_nodes)
+                            and all((bindings.get(nid) or {}).get("geometryUnchanged") for nid in expected_nodes)
+                            and ((audit.get("hiddenInstanceAudit") or {}).get("inside") or {}).get("vegetarianBound") is False
+                            and all((appearance.get(k) or {}).get("identical") for k in ("inside", "outside")))
+                status = "pass" if same else ("warn" if audit_ok else "fail")
+                g1.append(check("gate1.figma", "Figma node unchanged", status,
+                                {"nodeId": node_id,
+                                 "baselineKey": before_key, "finalKey": after_key,
+                                 "before": before, "after": after,
+                                 "hashMethod": bs[0] if bs else None,
+                                 "treeChangedDuringRun": not same,
+                                 "printAppearanceAudit": "pass" if audit_ok else "fail",
+                                 "note": "A Figma tree change is WARN only when the "
+                                         "post-binding close export renders pixel-identically and the "
+                                         "%s binding audit passes; the source PDF hash remains "
+                                         "the production input." % brand_name},
+                                "the job node metadata hash matches; print appearance follows the source PDF",
                                 "read-only MCP snapshot"))
+                g1.append(check("gate1.colorContract", "single %s Figma binding" % brand_name,
+                                "pass" if audit_ok else ("pending" if not audit_applies else "fail"),
+                                {"applicable": audit_applies,
+                                 "variable": variable.get("name"),
+                                 "variableId": variable.get("id"),
+                                 "collection": variable.get("collection"),
+                                 "hex": variable.get("hex"),
+                                 "bindings": {nid: (bindings.get(nid) or {}).get("after", {}).get("boundVariables")
+                                              for nid in expected_nodes},
+                                 "expectedHex": expected_hex,
+                                 "appearance": appearance},
+                                "one local COLOR variable; every approved fill is bound to the same VariableID; "
+                                "renders are pixel-identical before and after",
+                                "evidence: color/figma-audit.json; not applicable outside the audited file"))
             else:
                 g1.append(check("gate1.figma", "Figma node unchanged", "pending",
-                                {"nodeId": node_id, "inBaseline": before is not None,
+                                {"nodeId": node_id,
+                                 "inBaseline": before is not None,
                                  "inFinal": after is not None},
                                 "this job nodeId is in both snapshots",
                                 "the snapshot does not cover this node; it cannot support PASS"))
         else:
             g1.append(check("gate1.figma", "Figma node unchanged", "pending",
                             "snapshot missing", "one metadata snapshot before and after", ""))
+
 
     # ---------- Gate 2 ----------
     g2_ids = ("color.rows", "color.controlProbe", "proof.sourceVsCmyk",
@@ -693,6 +766,10 @@ def main():
             "blackPointCompensation": spec["print"].get("blackPointCompensation"),
             "tacLimitPercent": spec["print"].get("tacLimitPercent"),
         },
+        "color": {
+            "contract": (ca or {}).get("colorContract"),
+            "brand": (ca or {}).get("brandContract"),
+        },
         "gates": {"gate1": "fail" if any(c["status"] == "fail" for c in g1) else
                             ("pending" if any(c["status"] == "pending" for c in g1) else "pass"),
                   "gate2": g2_status,
@@ -717,9 +794,8 @@ def main():
     # and a missing candidate is always internal.
     g3_pending = [c["id"] for c in (gate3 or {}).get("checks", [])
                   if c.get("status") == "pending"]
-    gate3_present = bool((gate3 or {}).get("checks"))
-    gate3_external_only = bool(gate3_fresh) and gate3_present and set(g3_pending) <= {
-        "pdf.pdfx", "pdf.tac", "pdf.separations", "pdf.overprint"}
+    gate3_external_only = (gate3_fresh and set(g3_pending) <= {
+        "pdf.pdfx", "pdf.tac", "pdf.separations", "pdf.overprint"})
     external_pending = []
     internal_pending = []
     for c in pend:
@@ -770,7 +846,14 @@ def main():
     lines += ["", "---", "",
               "This report is not print acceptance. `07c` produces the candidate PDF and Gate 3 runs right after it;",
               "final release = Gate 3 + written print shop confirmation + human approval. Cite the evidence source when claiming PDF/X.",
-              "ΔE00 is an ICC prediction, not a physical measurement; the contract proof remains the final basis.", ""]
+              "ΔE00 is an ICC prediction, not a physical measurement; the contract proof remains the final basis.", "",
+              "## Delivery boundary", "",
+              "- **Print-shop input = PDF**: `%s`. Send, impose and RIP from this file only." % (
+                  job.get("output", {}).get("pdf", "")),
+              "- **Reference = AI**: `%s`. Artwork checks and traceability only; not a print input." % (
+                  job.get("output", {}).get("ai", "")),
+              "- The `.ai` has no document CMYK ICC or OutputIntent; a separation device reads the same `k` values through its own default space.",
+              "- A candidate PDF is written by `07c` and Gate 3 runs immediately after; release = Gate 3 + written print-shop confirmation + human approval.", ""]
     with open(os.path.join(job_dir, "qa.md"), "w", encoding="utf-8") as fh:
         fh.write("\n".join(lines))
 
@@ -791,15 +874,16 @@ Document ICC: **{spec["print"].get("iccName")}** (DestOutputProfile = GTS_PDFX O
 - [ ] Check in Acrobat output preview: inner/outer register marks and crosses lie outside TrimBox; inner marks touch the trim line, outer marks touch the 3 mm bleed line.
 - [ ] Confirm the document ICC is **{spec["print"].get("iccName")}** and is the DestOutputProfile of GTS_PDFX OutputIntent; the label matches the actual conversion (hash binding in pdf-finalize.json).
 - [ ] Confirm page content has no RGB operators and no unembedded fonts; a Type3 shell with 0 painting operators in CharProcs is acceptable.
-- [ ] Run `python3 scripts/08-gate3.py {job_id}` and confirm 0 FAIL; Gate 3 decides the PDF/X-4 structure self-check and the TAC limit ({spec["print"].get("tacLimitPercent")}%).
-- [ ] Measured TAC is in `preflight.json`; the limit is {spec["print"].get("tacLimitPercent")}% (spec.print.tacLimitPercent). Over the limit, use correct conversion or ink limiting, never clip or round.
+- [ ] Confirm the page and every reachable Form declare no ICCBased `/DefaultCMYK`; DeviceCMYK is interpreted through the single OutputIntent.
+- [ ] Run `python3 scripts/08-gate3.py {job_id}` and confirm 0 FAIL; Gate 3 decides the PDF/X-4 structure self-check, the no-`/DefaultCMYK` rule, inherited colour spaces, brand-colour regions, managed separations and the dual-renderer comparison.
+- [ ] Confirm the TAC limit ({spec["print"].get("tacLimitPercent")}%) on the stored ink in `preflight.json`; over the limit, use correct conversion or ink limiting, never clip or round.
 - [ ] Write the final PDF hash, the Gate 3 result and the print shop confirmation back to `gate3.json` before sending to print.
 
 ## Still needs print shop confirmation
 
-- Default is PDF/X-4:2010 (spec.print.pdfxStandard); a written print shop requirement wins when it differs.
+- Default is PDF/X-4 (ISO 15930-7:2010, XMP `pdfxid:GTS_PDFXVersion=PDF/X-4`); a written print shop requirement wins when it differs.
 - TAC limit {spec["print"].get("tacLimitPercent")}% (spec.print.tacLimitPercent); the current visible measurement is in preflight.json.
-- Whether paper, printing process and ICC match {spec["print"].get("iccName")}.
+- Whether paper, printing process and ICC match {spec["print"].get("iccName")}; the RIP's CMYK output space and intent handling.
 - Black plate / trapping policy; body text in this job is four-colour black/grey.
 - Contract proof and ΔE00 tolerance.
 

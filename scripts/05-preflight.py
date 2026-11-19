@@ -25,6 +25,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 sys.path.insert(0, os.path.join(HERE, "lib"))
 import pdfprobe  # noqa: E402
+import contract as colorcontract  # noqa: E402
 import raster  # noqa: E402
 
 GS = shutil.which("gs") or "/opt/homebrew/bin/gs"
@@ -46,7 +47,11 @@ def trim_mm(job, spec):
 
 
 def render_cmyk(pdf, dpi, out):
+    # TAC is measured on stored DeviceCMYK operands, not on a colour-managed
+    # reading. FastColor keeps the file's ink numbers; the file has no
+    # /DefaultCMYK, so DeviceCMYK is device CMYK under the OutputIntent.
     subprocess.run([GS, "-q", "-dBATCH", "-dNOPAUSE", "-dSAFER",
+                    "-dUseFastColor=true",
                     "-sDEVICE=tiff32nc", "-r%d" % dpi, "-o", out, pdf],
                    check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     return raster.read_tiff(out)["data"].astype(np.int16)
@@ -233,6 +238,11 @@ def main():
     global GS
     _gs = ((spec or {}).get("ghostscript") or {}).get("binary") or "gs"
     GS = shutil.which(_gs) or _gs
+    try:
+        spec = colorcontract.apply_to_spec(spec)
+    except Exception as exc:  # noqa: BLE001
+        print("colour contract error: %s" % exc, file=sys.stderr)
+        return 78
     job = load(os.path.join(job_dir, "job.json"))
     try:
         result = analyse(job_dir, job, spec)

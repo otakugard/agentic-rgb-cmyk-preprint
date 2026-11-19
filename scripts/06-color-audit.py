@@ -2,8 +2,9 @@
 """06-color-audit.py <job-id>
 
 Build a semantic sRGB -> delivery CMYK map from the actual source colours
-and the actual Ghostscript conversion path. The target is the ICC recorded in
-work/conversion.json, never a library constant.
+and the actual Ghostscript conversion path. The CMYK target is always the
+ICC recorded in work/conversion.json, never a library constant. The recorded
+target must also be the target profile named by config/color-contract.json.
 
 All Lab / ΔE00 values are ICC predictions (LittleCMS), not printed
 measurements. Brand tolerance is not asserted unless the print buyer
@@ -22,6 +23,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 sys.path.insert(0, os.path.join(HERE, "lib"))
 import color  # noqa: E402
+import contract as colorcontract  # noqa: E402
 import pdfprobe  # noqa: E402
 
 
@@ -67,7 +69,23 @@ def main():
     target_sha = conv["targetICCsha256"]
     target_info = color.profile_info(target_path)
     target_file_sha = hashlib.sha256(open(target_path, "rb").read()).hexdigest()
-    profile_binding_ok = target_file_sha == target_sha
+    profile_binding_ok = (target_file_sha == target_sha)
+    try:
+        color_contract = colorcontract.load()
+        brand_name = colorcontract.brand_color_name(color_contract)
+        contract_sha = colorcontract.contract_sha(color_contract)
+        contract_target, contract_target_profile = colorcontract.profile(color_contract, "target")
+    except Exception as exc:  # noqa: BLE001
+        print("colour contract error: %s" % exc, file=sys.stderr)
+        return 78
+    if os.path.realpath(target_path) != os.path.realpath(contract_target):
+        print("conversion target is not the contract target", file=sys.stderr)
+        return 65
+    contract_colors = {}
+    for name, entry in (color_contract.get("colors") or {}).items():
+        hexv = ((entry.get("figma") or {}).get("rgbHex") or "").upper()
+        if hexv:
+            contract_colors[hexv] = (name, entry)
     probe_args = list(conv["args"])
     # The cache must not depend on the job path. The ICC bytes are identical.
     fixed = []
@@ -135,29 +153,52 @@ def main():
         pred_lab = color.cmyk_to_lab([tuple(pred)], intent=1,
                                      src_profile=target_path)[0]
 
+        contract_entry = contract_colors.get(c["hex"].upper())
+        contract_meta = None
         override_k = None
-        for tgt, kt in override_targets.items():
-            if sum(abs(a - b) for a, b in zip(pred, tgt)) <= 1.0:
-                override_k = kt
-                break
+        if contract_entry:
+            contract_name, centry = contract_entry
+            expected = [float(x) for x in centry["cmyk"]["percent"]]
+            expected_bytes = [int(x) for x in centry["cmyk"]["bytes8"]]
+            idx = None
+            for i, cand in enumerate(pdf_cmyks):
+                if [int(round(float(x) * 2.55)) for x in cand] == expected_bytes:
+                    idx = i
+                    break
+            best = (0, idx, color.delta_e00(src_lab, pdf_labs[idx])) if idx is not None else None
+            contract_meta = {
+                "name": contract_name,
+                "expectedCmyk": expected,
+                "expectedBytes": expected_bytes,
+                "matched": idx is not None,
+                "matchRule": "byte equality (8-bit quantization)",
+            }
+        else:
+            override_k = None
+            for tgt, kt in override_targets.items():
+                if sum(abs(a - b) for a, b in zip(pred, tgt)) <= 1.0:
+                    override_k = kt
+                    break
 
-        # Greedy nearest match to a CMYK tuple actually present in cmyk.pdf.
-        best = None
-        for idx, cand in enumerate(pdf_cmyks):
-            if override_k is not None:
-                # The authorised override is matched by its recorded K value.
-                if not all(abs(a - b) <= 0.2 for a, b in zip(cand, override_k)):
+            # Greedy nearest match to a CMYK tuple actually present in cmyk.pdf.
+            # Contract colours never take this path; they are matched by the
+            # canonical 8-bit tuple above.
+            best = None
+            for idx, cand in enumerate(pdf_cmyks):
+                if override_k is not None:
+                    # The authorised override is matched by its recorded K value.
+                    if not all(abs(a - b) <= 0.2 for a, b in zip(cand, override_k)):
+                        continue
+                elif tuple(round(float(x), 2) for x in cand) in override_k_tuples:
+                    # Do not let a chromatic source grab another colour's K tuple.
                     continue
-            elif tuple(round(float(x), 2) for x in cand) in override_k_tuples:
-                # Do not let a chromatic source grab another colour's K tuple.
-                continue
-            # Match on the CMYK values produced by the same CMM, not on
-            # source Lab: two near-blacks can be closer in Lab than in ink.
-            cmyk_dist = sum(abs(a - b) for a, b in zip(cand, pred))
-            de_match = color.delta_e00(src_lab, pdf_labs[idx])
-            score = cmyk_dist + (1000 if idx in used else 0)
-            if best is None or score < best[0]:
-                best = (score, idx, de_match)
+                # Match on the CMYK values produced by the same CMM, not on
+                # source Lab: two near-blacks can be closer in Lab than in ink.
+                cmyk_dist = sum(abs(a - b) for a, b in zip(cand, pred))
+                de_match = color.delta_e00(src_lab, pdf_labs[idx])
+                score = cmyk_dist + (1000 if idx in used else 0)
+                if best is None or score < best[0]:
+                    best = (score, idx, de_match)
         if best is None:
             # Do not substitute the prediction for the actual file value.
             # An unmatched source colour is a real evidence gap.
@@ -183,12 +224,18 @@ def main():
                 return t[:-2] if t.endswith(".0") else t
             ai_key = "/".join(_fmt(x) for x in pdf_cmyk)
         entry = names.get(c["hex"], {})
+        if contract_meta:
+            entry = {"name": contract_meta["name"],
+                     "nameSource": "config/color-contract.json",
+                     "role": "brand-primary" if contract_meta["name"] == brand_name
+                             else "semantic-icon"}
         rows.append({
             "hex": c["hex"],
             "rgb": list(rgb),
-            "name": entry.get("name") or "descriptive",
-            "nameSource": entry.get("nameSource") or "descriptive; no brand token read",
-            "role": entry.get("role") or "descriptive",
+            "name": entry.get("name"),
+            "nameSource": entry.get("nameSource"),
+            "role": entry.get("role"),
+            "contract": contract_meta,
             "sourceOperators": c.get("count", 0),
             "pdfOperators": pdf_count,
             "aiOperators": (next((n for k, n in ai_counts.items()
@@ -217,9 +264,32 @@ def main():
         i = min(len(values) - 1, max(0, int(round((len(values) - 1) * p / 100.0))))
         return values[i]
 
+    brand_rows = {}
+    for r in rows:
+        if not r.get("contract"):
+            continue
+        brand_rows[r["name"]] = {
+            "sourceHex": r["hex"],
+            "sourceOperators": r["sourceOperators"],
+            "pdfOperators": r["pdfOperators"],
+            "aiOperators": r["aiOperators"],
+            "expectedCmyk": r["contract"]["expectedCmyk"],
+            "expectedBytes": r["contract"]["expectedBytes"],
+            "actualCmyk": r["actualCmyk"],
+            "matched": r["contract"]["matched"],
+            "matchRule": r["contract"]["matchRule"],
+            "tacPercent": r["tacPercent"],
+        }
+
     payload = {
         "jobId": job_id,
         "generatedAt": datetime.now().isoformat(timespec="seconds"),
+        "colorContract": {
+            "id": color_contract["contractId"],
+            "version": color_contract["version"],
+            "sha256": contract_sha,
+        },
+        "brandContract": brand_rows,
         "source": {
             "sha256": prepare.get("inputSha256"),
             "icc": prepare.get("sourceICC"),
@@ -242,6 +312,9 @@ def main():
             "renderingIntentName": conv["renderingIntentName"],
             "blackPointCompensation": conv["blackPointCompensation"],
             "overrideICC": conv["overrideICC"],
+            "recordedTargetICC": target_path,
+            "recordedTargetICCsha256": target_sha,
+            "profileBinding": "pass" if profile_binding_ok else "fail",
             "cmm": "LittleCMS (transicc)",
             "labReference": "D50, 2-degree observer, ICC PCS",
             "note": "ICC prediction, not a physical measurement. Target profile is the recorded conversion profile.",
@@ -263,6 +336,7 @@ def main():
                                      if r["deltaE00CmmDifference"] is not None), default=None),
             "maxProbeVsPdf": max((r["deltaE00ProbeVsPdf"] for r in rows if r["deltaE00ProbeVsPdf"] is not None), default=None),
             "unmatched": [r["hex"] for r in rows if not r["matched"]],
+            "profileBinding": "pass" if profile_binding_ok else "fail",
         },
         "rows": rows,
         "limitations": [
@@ -284,7 +358,7 @@ def main():
             icc_sha[:16], target_info.get("description") or os.path.basename(target_path),
             target_sha[:16]),
         "",
-        "Conversion: %s intent %d, BPC %s, OverrideICC %s. Delta E is an **ICC prediction, not a measurement on paper**." % (
+        "Conversion: %s intent %d, BPC %s, OverrideICC %s. The target ICC is bound to `work/conversion.json`. Delta E is an **ICC prediction, not a measurement on paper**." % (
             conv["renderingIntentName"], conv["renderingIntent"],
             conv["blackPointCompensation"], conv["overrideICC"]),
         "",
@@ -304,14 +378,17 @@ def main():
             ai_count, r["nameSource"] or "unconfirmed"))
     if payload["tolerance"]["status"] == "pending":
         lines += ["", "Brand colour tolerance is unconfirmed: the ΔE00 values above are for comparison only; they do not decide pass or fail."]
-    lines += ["", "The SHA-256 of the source ICC and the target ICC is written to `color-audit.json`."]
+    lines += ["", "The SHA-256 of the source ICC and the target ICC is written to `color-audit.json`.",
+              "The target ICC file hash matches the `conversion.json` record: `%s`." % (
+                  "yes" if profile_binding_ok else "**no** (the audit must not PASS on this)")]
     with open(os.path.join(job_dir, "color-mapping.md"), "w", encoding="utf-8") as fh:
         fh.write("\n".join(lines) + "\n")
 
     print(json.dumps({"ok": True, "colours": len(rows),
                       "maxDeltaE00": payload["summary"]["maxDeltaE00"],
                       "over5": payload["summary"]["over5"],
-                      "tolerance": payload["tolerance"]["status"]}, ensure_ascii=False))
+                      "tolerance": payload["tolerance"]["status"],
+                      "profileBinding": payload["summary"]["profileBinding"]}, ensure_ascii=False))
     return 0
 
 

@@ -153,27 +153,41 @@ try:
     spec = json.load(open(spec_path, encoding="utf-8"))
 except Exception as exc:
     print("spec: %s" % exc); sys.exit(1)
-icc = (spec.get("print") or {}).get("iccProfile") or ""
-if not icc:
-    print("spec: print.iccProfile is empty"); sys.exit(1)
-path = icc if os.path.isabs(icc) else os.path.join(root, icc)
-if not os.path.exists(path):
-    print("spec: missing ICC %s" % path); sys.exit(1)
-head = open(path, "rb").read(128)
-if head[16:20] != b"CMYK":
-    print("spec: ICC is not CMYK: %s" % path); sys.exit(1)
 try:
     marks = json.load(open(marks_path, encoding="utf-8"))
 except Exception as exc:
     print("marks: %s" % exc); sys.exit(1)
 if marks.get("style") != "jp-double":
     print("marks: style must be jp-double"); sys.exit(1)
+contract_path = os.path.join(root, "config", "color-contract.json")
+if not os.path.exists(contract_path):
+    print("contract: missing %s (copy config/color-contract.example.json)" % contract_path)
+    sys.exit(1)
+sys.path.insert(0, os.path.join(root, "scripts", "lib"))
+import contract as colorcontract
+try:
+    color_contract = colorcontract.load(contract_path)
+    spec = colorcontract.apply_to_spec(spec, color_contract)
+except Exception as exc:
+    print("contract: %s" % exc); sys.exit(1)
+brand = colorcontract.brand_color_name(color_contract)
+print("contract: %s v%s, brand %s"
+      % (color_contract.get("contractId"), color_contract.get("version"), brand))
+icc = (spec.get("print") or {}).get("iccProfile") or ""
+if not icc:
+    print("spec: print.iccProfile is empty after contract merge"); sys.exit(1)
+path = icc if os.path.isabs(icc) else os.path.join(root, icc)
+if not os.path.exists(path):
+    print("spec: missing ICC %s" % path); sys.exit(1)
+head = open(path, "rb").read(128)
+if head[16:20] != b"CMYK":
+    print("spec: ICC is not CMYK: %s" % path); sys.exit(1)
 print("spec: %s" % spec.get("print", {}).get("iccName", "unnamed"))
 print("icc:  %s" % path)
 print("marks: jp-double, %.1f mm offset" % float(marks.get("offsetMm", 0)))
 PY
 then
-  pass "config/print-spec.json and config/marks.json"
+  pass "config/print-spec.json, config/marks.json and config/color-contract.json"
 else
   fail "configuration invalid (see message above)"
 fi

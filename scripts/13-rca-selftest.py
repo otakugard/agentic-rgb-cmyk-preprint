@@ -49,6 +49,9 @@ def find_swop():
 
 
 SWOP = find_swop()
+SRGB = gate3.color.SRGB
+if not os.path.exists(SRGB):
+    SRGB = "/System/Library/ColorSync/Profiles/sRGB Profile.icc"
 
 
 def make_base(path, icc_bytes, decl=True, output_intent=True):
@@ -139,15 +142,18 @@ def main():
 
         def status(path, fn):
             return fn(path)
-
-        expect("defaultcmyk.base", "pass" if gate3.defaultcmyk_check(base, TARGET_SHA).get("ok") else "fail", "pass")
+        # /DefaultCMYK must be absent: PDF/X-4 does not require it, and an
+        # ICCBased CMYK default space re-maps bare k at the reader.
+        expect("nodefaultcmyk.declared",
+               gate3.defaultcmyk_absence_check(base)["status"], "fail")
 
         no_dcm = os.path.join(tmp, "no-defaultcmyk.pdf")
         writer = PdfWriter(clone_from=PdfReader(base))
         _, cs = page_cs(writer.pages[0])
         del cs["/DefaultCMYK"]
         writer.write(no_dcm)
-        expect("defaultcmyk.missing", "pass" if gate3.defaultcmyk_check(no_dcm, TARGET_SHA).get("ok") else "fail", "fail")
+        expect("nodefaultcmyk.absent",
+               gate3.defaultcmyk_absence_check(no_dcm)["status"], "pass")
 
         bare = os.path.join(tmp, "bare-defaultcmyk.pdf")
         writer = PdfWriter(clone_from=PdfReader(base))
@@ -155,12 +161,20 @@ def main():
         dcm = cs["/DefaultCMYK"].get_object()
         cs[NameObject("/DefaultCMYK")] = dcm[1]
         writer.write(bare)
-        expect("defaultcmyk.bareStream", "pass" if gate3.defaultcmyk_check(bare, TARGET_SHA).get("ok") else "fail", "fail")
+        expect("nodefaultcmyk.bareStream",
+               gate3.defaultcmyk_absence_check(bare)["status"], "fail")
 
-        if SWOP:
-            wrong = os.path.join(tmp, "wrong-defaultcmyk.pdf")
-            make_base(wrong, open(SWOP, "rb").read())
-            expect("defaultcmyk.wrongICC", "pass" if gate3.defaultcmyk_check(wrong, TARGET_SHA).get("ok") else "fail", "fail")
+        form_dcm = os.path.join(tmp, "form-defaultcmyk.pdf")
+        writer = PdfWriter(clone_from=PdfReader(base))
+        _, page_cs_dict = page_cs(writer.pages[0])
+        resources = DictionaryObject()
+        resources[NameObject("/ColorSpace")] = DictionaryObject({
+            NameObject("/DefaultCMYK"): page_cs_dict["/DefaultCMYK"]})
+        add_form(writer, writer.pages[0], resources,
+                 b"0.4 0.106 0.451 0.051 k 0 0 100 100 re f")
+        writer.write(form_dcm)
+        expect("nodefaultcmyk.formLevel",
+               gate3.defaultcmyk_absence_check(form_dcm)["status"], "fail")
 
         no_oi = os.path.join(tmp, "no-outputintent.pdf")
         writer = PdfWriter(clone_from=PdfReader(base))
@@ -177,14 +191,17 @@ def main():
         expect("outputintent.subtype", "fail" if subtype != "/GTS_PDFX" else "pass", "fail",
                {"subtype": subtype})
 
-        conv = {"targetICC": TARGET, "targetICCsha256": TARGET_SHA}
+        conv = {"targetICC": TARGET, "targetICCsha256": TARGET_SHA,
+                "colorContractSha256": "contract-sha"}
         oi = (gate3.pdfprobe.output_intents(base)[0].get("destProfile") or {}).get("sha256")
-        dcm_sha = gate3.defaultcmyk_check(base, TARGET_SHA).get("streamSha256")
-        expect("profilechain.base", gate3.profilechain_check(conv, TARGET_SHA, oi, dcm_sha)["status"], "pass")
+        expect("profilechain.base",
+               gate3.profilechain_check(conv, "contract-sha", TARGET_SHA, oi)["status"], "pass")
+        expect("profilechain.staleContract",
+               gate3.profilechain_check(conv, "other-sha", TARGET_SHA, oi)["status"], "fail")
         expect("profilechain.missingOutputIntent",
-               gate3.profilechain_check(conv, TARGET_SHA, None, dcm_sha)["status"], "fail")
+               gate3.profilechain_check(conv, "contract-sha", TARGET_SHA, None)["status"], "fail")
         expect("profilechain.missingConversionRecord",
-               gate3.profilechain_check(None, TARGET_SHA, oi, dcm_sha)["status"], "pending")
+               gate3.profilechain_check(None, "contract-sha", TARGET_SHA, oi)["status"], "pending")
 
         undefined = os.path.join(tmp, "undefined-cs.pdf")
         writer = PdfWriter(clone_from=PdfReader(base))
@@ -216,6 +233,22 @@ def main():
             expect("inheritedcs.rgbICC", rgbf["status"], "fail",
                    {"rgbSpaces": rgbf["rgbSpaces"]})
 
+        cmyk_icc_form = os.path.join(tmp, "icc-cmyk-form.pdf")
+        writer = PdfWriter(clone_from=PdfReader(base))
+        cmyk_stream = DecodedStreamObject()
+        cmyk_stream.set_data(open(TARGET, "rb").read())
+        cmyk_stream[NameObject("/N")] = NumberObject(4)
+        resources = DictionaryObject()
+        resources[NameObject("/ColorSpace")] = DictionaryObject({
+            NameObject("/CS0"): ArrayObject(
+                [NameObject("/ICCBased"), writer._add_object(cmyk_stream)])})
+        add_form(writer, writer.pages[0], resources,
+                 b"/CS0 cs 0.4 0.106 0.451 0.051 scn 0 0 100 100 re f")
+        writer.write(cmyk_icc_form)
+        icc_form = gate3.inheritedcs_check(cmyk_icc_form, TARGET_SHA)
+        expect("inheritedcs.iccCmyk", icc_form["status"], "fail",
+               {"iccCmykSpaces": icc_form["iccCmykSpaces"]})
+
         inherited = os.path.join(tmp, "inherited-form.pdf")
         writer = PdfWriter(clone_from=PdfReader(base))
         add_form(writer, writer.pages[0], None, b"/CSAll cs 1 scn 0 0 100 100 re f")
@@ -232,19 +265,70 @@ def main():
         writer.write(rgb_only)
         expect("inkStored.noCMYK", gate3.stored_ink_check(rgb_only)["status"], "pending")
 
+        # Region contract used by the brand and managed-separation fixtures.
+        contract = {
+            "contractId": "selftest", "version": 1, "brandColor": "BRAND_GREEN",
+            "colors": {
+                "BRAND_GREEN": {
+                    "semanticRole": "brand-surface",
+                    "cmyk": {"percent": [40.0, 10.6, 45.1, 5.1],
+                             "bytes8": [102, 27, 115, 13],
+                             "maxPercentDeviation": 0.05, "tacPercent": 100.8},
+                    "regions": [{"label": "full-page", "jobNode": "SELFTEST",
+                                 "paintNode": "SELFTEST", "bboxPx": [0, 0, 595, 842],
+                                 "framePx": [595, 842], "coverage": "full-bleed",
+                                 "sample": [0.2, 0.2, 0.8, 0.8]}]},
+                "SECONDARY_GREEN": {
+                    "semanticRole": "semantic-icon",
+                    "cmyk": {"percent": [76.9, 1.6, 62.0, 0.4],
+                             "bytes8": [196, 4, 158, 1],
+                             "maxPercentDeviation": 0.05, "tacPercent": 140.9},
+                    "regions": []},
+            },
+        }
+        job = {"figma": {"nodeId": "SELFTEST"}}
+        boxes = {"MediaBox": [0, 0, 595, 842], "BleedBox": [0, 0, 595, 842],
+                 "TrimBox": [0, 0, 595, 842]}
+
+        brand = gate3.pdfpaint.brand_green_check(base, contract, job, boxes, TARGET)
+        expect("brandgreen.canonical", brand["status"], "pass",
+               {"canonicalEventCount": brand.get("canonicalEventCount")})
+
+        secondary = os.path.join(tmp, "secondary-green.pdf")
+        writer = PdfWriter(clone_from=PdfReader(base))
+        stream = writer.pages[0]["/Contents"].get_object()
+        stream.set_data(stream.get_data()
+                        + b"\nq 0.769 0.016 0.62 0.004 k 0 0 12 12 re f Q\n")
+        writer.write(secondary)
+        sec = gate3.pdfpaint.brand_green_check(secondary, contract, job, boxes, TARGET)
+        expect("brandgreen.secondaryDeclared", sec["status"], "pass",
+               {"greenTuples": sec.get("greenTuples")})
+
+        duplicate = os.path.join(tmp, "duplicate-green.pdf")
+        writer = PdfWriter(clone_from=PdfReader(base))
+        stream = writer.pages[0]["/Contents"].get_object()
+        stream.set_data(stream.get_data()
+                        + b"\nq 0.38 0.137 0.471 0 k 0 0 595 842 re f Q\n")
+        writer.write(duplicate)
+        dup = gate3.pdfpaint.brand_green_check(duplicate, contract, job, boxes, TARGET)
+        expect("brandgreen.duplicateTuple", dup["status"], "fail",
+               {"regions": dup.get("regions")})
+
+        undeclared = os.path.join(tmp, "undeclared-green.pdf")
+        writer = PdfWriter(clone_from=PdfReader(base))
+        stream = writer.pages[0]["/Contents"].get_object()
+        stream.set_data(stream.get_data()
+                        + b"\nq 0.65 0.05 0.55 0.02 k 0 0 12 12 re f Q\n")
+        writer.write(undeclared)
+        und = gate3.pdfpaint.brand_green_check(undeclared, contract, job, boxes, TARGET)
+        expect("brandgreen.thirdGreen", und["status"], "fail",
+               {"greenTuples": und.get("greenTuples")})
+
         base_stored = gate3.stored_ink_check(base)
         managed = gate3.managed_separations_check(
-            base, base_stored, gate3.defaultcmyk_check(base, TARGET_SHA), dpi=72)
-        expect("separationsManaged.controlProbe", managed["status"], "pass",
-               {"mechanism": managed.get("mechanism"), "plateInk": managed.get("plateInk"),
-                "probeInk": managed.get("probeInk")})
-
-        if SWOP:
-            wrong_stored = gate3.stored_ink_check(wrong)
-            wrong_managed = gate3.managed_separations_check(
-                wrong, wrong_stored, gate3.defaultcmyk_check(wrong, TARGET_SHA), dpi=72)
-            expect("separationsManaged.wrongDeclaration", wrong_managed["status"], "fail",
-                   {"mechanism": wrong_managed.get("mechanism")})
+            base, base_stored, contract, job, boxes, TARGET, dpi=72)
+        expect("separationsManaged.regionControl", managed["status"], "pass",
+               {"regions": managed.get("regions"), "controlProfile": managed.get("controlProfile")})
 
         green = (40.0, 10.6, 45.1, 5.1)
         plates = [(18.0, 84.3, 33.3, 33.7), green]
@@ -346,10 +430,10 @@ def main():
                {"returncode": figma.returncode})
 
         if MUTOOL:
-            ind = gate3.independent_render_check(base, base, None, None)
+            ind = gate3.independent_render_check(base, base, None, None, TARGET, SRGB)
             expect("independentRender.twoEngines", ind["status"], "pass")
         else:
-            ind = gate3.independent_render_check(base, base, None, None)
+            ind = gate3.independent_render_check(base, base, None, None, TARGET, SRGB)
             expect("independentRender.missingMuPDF", ind["status"], "pending")
 
     payload = {

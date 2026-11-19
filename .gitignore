@@ -10,6 +10,9 @@ __pycache__/
 jobs/*
 !jobs/.gitkeep
 
+# Per-brand colour contract (may contain client values)
+config/color-contract.json
+
 # Local ICC profiles
 color/profiles/*.icc
 !color/profiles/README.md
