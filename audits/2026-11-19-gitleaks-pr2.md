@@ -63,6 +63,14 @@ The committed template `config/color-contract.example.json` contains
 placeholder hashes (`replace-with-...`), no profile bytes and no client
 values.
 
+## Privacy review
+
+PR #2 contains the project brand tuple in `config/color-contract.example.json`,
+`README.md`, `scripts/13-rca-selftest.py` and
+`tests/rca-regression-selftest.json`. The owner reviewed this on 2026-11-19 and
+confirmed that the brand colour values are **not confidential**. They are not a
+leak, and no history rewrite or value replacement is required.
+
 ## Limits
 
 - gitleaks detects credential-shaped strings. It does not prove the absence of
