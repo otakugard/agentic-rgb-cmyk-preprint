@@ -9,6 +9,7 @@ Two read-only audits, run with `codex exec` (model `gpt-6.1-sol`, reasoning
 | End | this public repository, four review passes | **PASS** | [`end-audit.md`](end-audit.md) |
 | Dual entry | direct sRGB PDF plus RCA regression gates | **PASS** | [`2026-11-18-dual-entry.md`](2026-11-18-dual-entry.md) |
 | Colour contract | single brand colour, no `/DefaultCMYK`, generated fixtures | **PASS** | [`2026-11-19-colour-contract.md`](2026-11-19-colour-contract.md) |
+| gitleaks | PR #2 and full repository history | **PASS** | [`2026-11-19-gitleaks-pr2.md`](2026-11-19-gitleaks-pr2.md) |
 
 This copy removes client names, keys, node ids, and colour values. The end audit
 ran four passes because each pass found real defects; the findings below were
