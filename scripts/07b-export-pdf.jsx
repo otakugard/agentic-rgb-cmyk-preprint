@@ -5,7 +5,7 @@
  * Export the candidate deliverable PDF from the approved <job-id>.ai. It only exports PDF and does not change the .ai.
  *
  * Arguments come from job.pdfExport (fileName / contract / layout) and config/print-spec.json.
- * After export, 07c-finalize-pdf.py sets the page boxes, writes the /DefaultCMYK ICC and binds the hash.
+ * After export, 07c-finalize-pdf.py sets the page boxes, writes the GTS_PDFX OutputIntent (no /DefaultCMYK) and binds the hash.
  */
 
 var RESULT_PATH = JOB_DIR + "/result.json";
@@ -142,7 +142,7 @@ try {
 
   /* COLORCONVERSIONTODEST and REPURPOSE can both trigger MRAP after an artboard change.
      The artwork is already delivery-ICC CMYK, so export applies no colour conversion. 07c writes the
-     ICC as /DefaultCMYK and the values stay unchanged. */
+     GTS_PDFX OutputIntent and the values stay unchanged; no /DefaultCMYK is written. */
   o.colorConversionID = ColorConversion.None;
   o.colorDestinationID = ColorDestination.None;
   o.colorProfileID = ColorProfile.None;

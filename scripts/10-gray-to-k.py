@@ -48,6 +48,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 sys.path.insert(0, os.path.join(HERE, "lib"))
 import color  # noqa: E402
+import contract as colorcontract  # noqa: E402
 import pdfprobe  # noqa: E402
 
 TOL = 0.02
@@ -261,7 +262,8 @@ def main():
         print("missing work/konly-targets.json (explicit authorised target list)", file=sys.stderr)
         return 66
 
-    icc = (prep.get("conversion") or {}).get("targetICC") or spec["print"]["iccProfile"]
+    icc = (prep.get("conversion") or {}).get("targetICC") or colorcontract.profile(
+        colorcontract.load(), "target")[0]
     intent = int((prep.get("conversion") or {}).get("renderingIntent", 1))
 
     for t in targets_doc["targets"]:

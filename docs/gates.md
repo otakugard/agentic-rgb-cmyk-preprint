@@ -40,18 +40,19 @@ report records it as PENDING.
 |---|---|
 | TrimBox / BleedBox / MediaBox | exact values from `job.json` and `marks.json` |
 | OutputIntent | GTS_PDFX + delivery ICC hash |
-| PDF/X-4 structure | version in Info and XMP, `/Trapped`, no `/PS`, no Action/JS, no encryption |
+| PDF/X-4 structure | version in Info and XMP, `/Trapped` as a name, XMP dates and document IDs, trailer `/ID`, no ArtBox, no `/PS`, no Action/JS, no encryption |
 | No RGB operators | content stream scan, object streams included |
 | Fonts | no unembedded font; Type3 shells must not paint |
 | Marks | count and geometry, outside TrimBox |
 | Bleed content | rasterised band of actual ink across the full bleed |
 | TAC | raster plus visible vector maximum; registration marks are excluded from the raster crop |
 | Overprint | ExtGState and content-stream usage |
-| `/DefaultCMYK` | one ICCBased array on the page, N=4, delivery ICC; no form override |
-| ICC binding | config, conversion record, DestOutputProfile and `/DefaultCMYK` share one SHA-256 |
-| Inherited colour spaces | page and Form `cs`/`CS` names resolve; CMYK ICC matches; no RGB space |
+| No `/DefaultCMYK` | page and every reachable Form declare no ICCBased CMYK default space; DeviceCMYK is interpreted by the single OutputIntent |
+| ICC binding | contract target, conversion record and DestOutputProfile share one SHA-256; the conversion record names the current contract |
+| Brand-colour regions | each declared region is covered by one opaque, Normal, non-overprinting DeviceCMYK event; every greenish operator matches a declared contract colour |
+| Inherited colour spaces | page and Form `cs`/`CS` names resolve; no ICCBased CMYK or RGB inherited space |
 | Stored ink | content-stream `k`/`K` and four-component `scn`/`SCN` operands |
-| Managed separations | stored tuples versus rendered plates; removal probe restores a stored tuple |
+| Managed separations | region samples rendered with an explicit output ICC; MuPDF reads the stored bytes; a deliberately different output profile must shift the plates |
 | Independent render | Ghostscript and MuPDF agree on the same file inside TrimBox |
 | Fold | optional half-fold line at trim centre and equal panel widths |
 

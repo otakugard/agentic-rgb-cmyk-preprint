@@ -48,6 +48,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 sys.path.insert(0, os.path.join(HERE, "lib"))
 import color  # noqa: E402
+import contract as colorcontract  # noqa: E402
 import pdfprobe  # noqa: E402
 import raster  # noqa: E402
 
@@ -206,7 +207,8 @@ def render_diff(base, test, bbox, icc):
             tif = os.path.join(tmp, tag + ".tif")
             subprocess.run([GS, "-q", "-dBATCH", "-dNOPAUSE", "-dSAFER",
                             "-sOverprint=simulate", "-sDEVICE=tiff32nc",
-                            "-sDefaultCMYKProfile=" + icc, "-dOverrideICC=true",
+                            "-sDefaultCMYKProfile=" + icc,
+                            "-sOutputICCProfile=" + icc,
                             "-r%d" % dpi, "-o", tif, pdf], check=True,
                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             arrs.append(raster.read_tiff(tif)["data"][..., :4].astype(np.int16))
@@ -255,7 +257,7 @@ def main():
     if not job:
         print("job.json not found", file=sys.stderr)
         return 66
-    icc = spec["print"]["iccProfile"]
+    icc = colorcontract.profile(colorcontract.load(), "target")[0]
     base = os.path.join(job_dir, "work", "cmyk-final.pdf")
     targets_doc = load(args.targets_json)
     if not targets_doc or not targets_doc.get("targets"):

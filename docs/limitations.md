@@ -28,7 +28,7 @@ by this repository.
 | One CMYK tuple disappears | Illustrator omits hidden objects on save | WARN when the visible render is identical |
 | Byte scan misses Type3 / SMask | they live in object streams | decode object streams first (`lib/pdfprobe.py`) |
 | Control probe deviates after an ICC change | a library constant still points at the old profile | pass the profile explicitly; never rely on a module default |
-| A CMYK PDF reads differently in another tool | the file declares `/DefaultCMYK`; the device reads through its own space | record stored operands and device plates separately; run the removal probe |
+| A CMYK PDF reads differently in another tool | the file declares an ICCBased `/DefaultCMYK`, so the device re-separates bare `k` through it | new PDFs omit `/DefaultCMYK` and keep DeviceCMYK under one OutputIntent; legacy files keep the stored-operand and plate comparison |
 | Two runs produce different PDF bytes | dates, `/ID` and titles differ | compare content streams, histograms and renders; state the metadata difference |
 | DeltaE00 jumps after a single-K override | greedy nearest-match pairing | make the override an explicit input (`konly-targets.json`) |
 

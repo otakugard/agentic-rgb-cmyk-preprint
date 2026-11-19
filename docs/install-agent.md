@@ -17,7 +17,8 @@ Do:
 2. Install missing Homebrew packages: ghostscript little-cms2 qpdf mupdf-tools python@3.12.
 3. Create .venv and install requirements.txt.
 4. Find a local ISO Coated v2 300% (ECI) ICC and an sRGB ICC. Copy them into
-   color/profiles/ and set print.iccProfile in config/print-spec.json.
+   color/profiles/ and copy config/color-contract.example.json to
+   config/color-contract.json. Fill its profile paths and SHA-256 values.
    If no ICC exists, stop and ask. Do not download ICC files from unknown hosts.
 5. Run ./install/verify.sh. Paste the output.
 6. Run: source .venv/bin/activate && python3 scripts/09-selftest.py
@@ -27,7 +28,7 @@ Do:
 
 Do not:
 - Modify files under scripts/ to make checks pass.
-- Change config values other than print.iccProfile.
+- Change config values other than the colour contract and the print-spec mirror.
 - Claim PDF/X compliance or print readiness.
 - Run a production job.
 
@@ -45,7 +46,7 @@ Report: versions, ICC paths, verify.sh output, selftest result, and any gap.
 | `pypdf`, `numpy` | import succeeds inside `.venv` |
 | qpdf | `qpdf --version` succeeds |
 | MuPDF | `mutool -v` succeeds; without it the independent-render check stays PENDING |
-| ICC | `config/print-spec.json` → `print.iccProfile` points to an existing file |
+| ICC | `config/color-contract.json` profiles resolve; hashes match; the print-spec mirror agrees |
 | Selftest | `scripts/09-selftest.py` reports `ok: true` and detects the 325% TAC fixture |
 | RCA fixtures | `scripts/13-rca-selftest.py` reports `ok: true` |
 
@@ -54,7 +55,7 @@ Report: versions, ICC paths, verify.sh output, selftest result, and any gap.
 - Do not install a cracked or bundled Adobe product.
 - Do not fetch ICC files from a random URL. Use a local Adobe/ECI profile or
   ask the user.
-- Do not change `print.iccProfile` to a profile you did not verify by name.
+- Do not change a contract profile to one you did not verify by name.
 - Do not lower `illustrator.minimumVersion`. 2024 (28.0) is the floor; a newer
   release does not need a config change.
 - Do not run `01-prepare.sh` or any job step. Installation stops at verification.

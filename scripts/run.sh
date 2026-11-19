@@ -113,20 +113,20 @@ TOKEN="$(python3 -c 'import secrets;print(secrets.token_hex(8))')"
 printf '%s' "$TOKEN" > "$JOB/.run-token"
 
 AS_FILE="${TMPDIR:-/tmp}/rgb-cmyk-preprint-$$.applescript"
-if ! python3 - "$JOB" "$SPEC" "$JSX" "$AS_FILE" <<'PY'
+if ! python3 - "$JOB" "$SPEC" "$JSX" "$AS_FILE" "$APP_PATH" <<'PY'
 import json, sys
 
-job, spec, jsx, out = sys.argv[1:5]
+job, spec, jsx, out, app_path = sys.argv[1:6]
 code = (
     "var JOB_DIR = %s; var SPEC_PATH = %s; $.evalFile(new File(%s));"
     % (json.dumps(job), json.dumps(spec), json.dumps(jsx))
 )
 as_src = (
-    'tell application id "com.adobe.illustrator"\n'
+    'tell application %s\n'
     '  set r to do javascript %s\n'
     '  return r\n'
     'end tell\n'
-) % json.dumps(code)
+) % (json.dumps(app_path), json.dumps(code))
 open(out, "w").write(as_src)
 PY
 then

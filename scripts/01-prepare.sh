@@ -1,7 +1,7 @@
 #!/bin/bash
 # 01-prepare.sh <job-id>
 #
-# Convert an RGB PDF into a CMYK PDF for the target ICC (ICC in config/print-spec.json).
+# Convert an RGB PDF into a CMYK PDF for the delivery ICC in config/color-contract.json.
 # Accepted sources: a Figma PDF export, or an already laid-out sRGB PDF at final size.
 #
 # Why not use the Illustrator "Document Color Mode > CMYK" command:
@@ -40,11 +40,43 @@ for k in sys.argv[2].split("."):
 print(d if not isinstance(d,bool) else str(d).lower())' "$SPEC" "$1"
 }
 
-ICC="$(spec_get print.iccProfile)"
+ICC="$(python3 - "$ROOT" <<'PY'
+import os, sys
+sys.path.insert(0, os.path.join(sys.argv[1], "scripts", "lib"))
+import contract
+print(contract.profile(contract.load(), "target")[0])
+PY
+)"
 GS_BIN="$(spec_get ghostscript.binary)"
 IMG_ENC="$(spec_get ghostscript.imageEncoding)"
-INTENT="$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["print"].get("renderingIntent",1))' "$SPEC")"
-BPC="$(python3 -c 'import json,sys;print(str(json.load(open(sys.argv[1]))["print"].get("blackPointCompensation",True)).lower())' "$SPEC")"
+INTENT="$(python3 - "$ROOT" <<'PY'
+import os, sys
+sys.path.insert(0, os.path.join(sys.argv[1], "scripts", "lib"))
+import contract
+print(contract.load()["conversion"]["renderingIntent"])
+PY
+)"
+BPC="$(python3 - "$ROOT" <<'PY'
+import os, sys
+sys.path.insert(0, os.path.join(sys.argv[1], "scripts", "lib"))
+import contract
+print(str(contract.load()["conversion"]["blackPointCompensation"]).lower())
+PY
+)"
+CONTRACT_SHA="$(python3 - "$ROOT" <<'PY'
+import os, sys
+sys.path.insert(0, os.path.join(sys.argv[1], "scripts", "lib"))
+import contract
+print(contract.contract_sha(contract.load()))
+PY
+)"
+TARGET_SHA="$(python3 - "$ROOT" <<'PY'
+import os, sys
+sys.path.insert(0, os.path.join(sys.argv[1], "scripts", "lib"))
+import contract
+print(contract.profile(contract.load(), "target")[1]["sha256"])
+PY
+)"
 
 [ -f "$ICC" ] || { echo "ICC profile missing: $ICC (run from repo root, or set an absolute path)" >&2; exit 78; }
 command -v "$GS_BIN" >/dev/null 2>&1 || { echo "ghostscript not found: $GS_BIN" >&2; exit 78; }
@@ -161,16 +193,20 @@ if [ "$SOURCE_MODE" = "srgb-pdf" ]; then
   esac
 fi
 
-TARGET_SHA=$(shasum -a 256 "$ICC" | awk '{print $1}')
+ACTUAL_TARGET_SHA=$(shasum -a 256 "$ICC" | awk '{print $1}')
+if [ "$ACTUAL_TARGET_SHA" != "$TARGET_SHA" ]; then
+  echo "target ICC changed after contract load: $ACTUAL_TARGET_SHA != $TARGET_SHA" >&2
+  exit 78
+fi
 GS_VER=$("$GS_BIN" --version 2>/dev/null | head -1)
 
 # Actual Ghostscript conversion arguments. OverrideICC=false keeps the embedded source ICC.
 # RenderIntent=1: relative colorimetric. BlackPtComp=1: black point compensation.
 # 06-color-audit verifies these arguments on measured CMYK control patches, not on the echo alone.
 CONVERSION_JSON="$WORK/conversion.json"
-python3 - "$CONVERSION_JSON" "$GS_BIN" "$GS_VER" "$ICC" "$TARGET_SHA" "$SRC_ICC" "$SOURCE_ICC_SHA" "$INTENT" "$BPC" "$IMG_FILTER" <<'PY'
+python3 - "$CONVERSION_JSON" "$GS_BIN" "$GS_VER" "$ICC" "$TARGET_SHA" "$SRC_ICC" "$SOURCE_ICC_SHA" "$INTENT" "$BPC" "$IMG_FILTER" "$CONTRACT_SHA" <<'PY'
 import json, sys
-out, gs, ver, icc, target_sha, src_icc, src_sha, intent, bpc, img_filter = sys.argv[1:12]
+out, gs, ver, icc, target_sha, src_icc, src_sha, intent, bpc, img_filter, contract_sha = sys.argv[1:13]
 args = [
     "--permit-file-read=" + icc,
     "--permit-file-read=" + src_icc,
@@ -192,6 +228,8 @@ payload = {
     "gsBinary": gs,
     "gsVersion": ver,
     "args": args,
+    "colorContract": "config/color-contract.json",
+    "colorContractSha256": contract_sha,
     "targetICC": icc,
     "targetICCsha256": target_sha,
     "sourceICC": src_icc,
@@ -231,10 +269,10 @@ if [ $RC -ne 0 ] || [ ! -f "$OUT" ]; then
   exit 70
 fi
 
-python3 - "$JOB" "$SRC" "$CONVERT_SRC" "$OUT" "$ICC" "$CONVERSION_JSON" "$WORK/source-audit.json" "$SPEC" "$MASK_JSON" "$SOURCE_MODE" <<'PY'
+python3 - "$JOB" "$SRC" "$CONVERT_SRC" "$OUT" "$ICC" "$CONVERSION_JSON" "$WORK/source-audit.json" "$SPEC" "$MASK_JSON" "$CONTRACT_SHA" <<'PY'
 import hashlib, json, os, re, sys
 
-job, src, convert_src, out, icc, conv_path, audit_path, spec_path, mask_path, source_mode = sys.argv[1:11]
+job, src, convert_src, out, icc, conv_path, audit_path, spec_path, mask_path, contract_sha = sys.argv[1:11]
 raw = open(out, "rb").read()
 mb = re.search(rb"/MediaBox\s*\[([^\]]*)\]", raw)
 nums = [float(x) for x in mb.group(1).split()] if mb else []
@@ -270,6 +308,7 @@ payload = {
     "sourceICCsha256": conv["sourceICCsha256"],
     "conversion": conv,
     "sourceAuditSha256": hashlib.sha256(open(audit_path, "rb").read()).hexdigest(),
+    "colorContractSha256": contract_sha,
     "configSha256": hashlib.sha256(open(spec_path, "rb").read()).hexdigest(),
 }
 

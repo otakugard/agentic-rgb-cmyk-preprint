@@ -20,6 +20,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 sys.path.insert(0, os.path.join(HERE, "lib"))
 import color  # noqa: E402
+import contract as colorcontract  # noqa: E402
 import raster  # noqa: E402
 import source  # noqa: E402
 
@@ -63,7 +64,19 @@ def main():
 
     gs = prepare["conversion"]["gsBinary"]
     fogra = prepare["conversion"]["targetICC"]
-    srgb = color.SRGB
+    try:
+        color_contract = colorcontract.load()
+        target_path, target_profile = colorcontract.profile(color_contract, "target")
+        render_path, render_profile = colorcontract.profile(color_contract, "renderRGB")
+        source_path, source_profile = colorcontract.profile(color_contract, "source")
+    except Exception as exc:  # noqa: BLE001
+        print("colour contract error: %s" % exc, file=sys.stderr)
+        return 78
+    if os.path.realpath(fogra) != os.path.realpath(target_path):
+        print("recorded conversion target does not match the contract", file=sys.stderr)
+        return 65
+    srgb = render_path
+    source_icc = source_path
     bleed = float(job.get("bleedMm", 3) or 0)
     page_scale = source.page_scale(job, spec)
 
@@ -88,8 +101,11 @@ def main():
         "jobId": job_id,
         "ok": False,
         "render": {"dpi": dpi, "gs": prepare["conversion"]["gsVersion"],
-                   "tificc": "LittleCMS (tificc)", "srgb": srgb,
-                   "fogra39": fogra, "bleedMm": bleed},
+                   "tificc": "LittleCMS (tificc)",
+                   "sourceICC": {"path": source_icc, "sha256": source_profile["sha256"]},
+                   "targetICC": {"path": target_path, "sha256": target_profile["sha256"]},
+                   "renderRGB": {"path": srgb, "sha256": render_profile["sha256"]},
+                   "bleedMm": bleed},
         "hashes": {
             "source": prepare.get("inputSha256"),
             "cmyk": prepare.get("outputSha256"),
@@ -98,20 +114,26 @@ def main():
         "proof": {
             "illustratorSoftproof": "pending",
             "lcmsSimulation": "complete",
-            "note": "ICC soft proof only. Illustrator Proof Setup and contract proof are separate checks.",
+            "note": "ICC soft proof only. Every render names its source and destination profile. "
+                    "Illustrator Proof Setup and contract proof are separate checks.",
         },
         "files": {},
         "warnings": [],
     }
 
-    # Source RGB at requested dpi.
+    # Source RGB at requested dpi, with the recorded source ICC as the
+    # default for untagged RGB.
     run([gs, "-q", "-dBATCH", "-dNOPAUSE", "-dSAFER", "-sDEVICE=tiff24nc",
+         "-sDefaultRGBProfile=%s" % source_icc,
          "-r%d" % dpi, "-o", paths["sourceTif"], src])
     src_tif = raster.read_tiff(paths["sourceTif"])
     source_rgb = src_tif["data"][..., :3]
 
-    # CMYK intermediate at the same page geometry.
+    # CMYK intermediate: the recorded target is the explicit output device
+    # profile. No renderer default is allowed to decide the ink space.
     run([gs, "-q", "-dBATCH", "-dNOPAUSE", "-dSAFER", "-sDEVICE=tiff32nc",
+         "-sDefaultCMYKProfile=%s" % target_path,
+         "-sOutputICCProfile=%s" % target_path,
          "-r%d" % dpi, "-o", paths["cmykTif"], cmyk])
 
     # Relative + BPC (the production intent) and absolute (paper white).
@@ -159,10 +181,18 @@ def main():
         try:
             ai_dpi = int(round(dpi / page_scale))
             run([gs, "-q", "-dBATCH", "-dNOPAUSE", "-dSAFER", "-sDEVICE=tiff32nc",
+                 "-sDefaultCMYKProfile=%s" % target_path,
+                 "-sOutputICCProfile=%s" % target_path,
                  "-r%d" % ai_dpi, "-o", paths["aiTif"], ai])
-            run(["tificc", "-n", "-i" + fogra, "-o" + srgb, "-t1", "-b", "-w8",
+            run(["tificc", "-n", "-i" + target_path, "-o" + srgb, "-t1", "-b", "-w8",
                  paths["aiTif"], paths["aiSimTif"]])
             ai_rgb = raster.read_tiff(paths["aiSimTif"])["data"][..., :3]
+            result["aiProfile"] = {
+                "observed": "no document CMYK ICC or OutputIntent (reference artifact)",
+                "assumption": "DeviceCMYK interpreted as the recorded target ICC for diagnostic rendering",
+                "path": target_path,
+                "sha256": target_profile["sha256"],
+            }
             raster.write_png(paths["aiPng"], ai_rgb)
             bleed_px = int(round((bleed / page_scale) / 25.4 * dpi))
             h, w = sim_rgb.shape[:2]

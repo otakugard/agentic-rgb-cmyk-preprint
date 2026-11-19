@@ -1,0 +1,130 @@
+{
+  "_note": "Copy this file to config/color-contract.json and fill every value from your own design token and measurement. config/color-contract.json is the single source of truth for conversion, audit, finalize and gate stages. Do not copy these values into scripts.",
+  "_setup": [
+    "brandColor must name an entry under colors. It is the canonical brand colour.",
+    "Each colour needs figma.rgbHex, cmyk.percent (four values), cmyk.bytes8 (four values) and cmyk.tacPercent.",
+    "regions map a Figma node to the paint node that covers it. A job with no matching region fails pdf.brandgreen instead of passing silently.",
+    "profiles.*.path points at a local ICC file. shasum -a 256 it and paste the hash. The source profile is the one the RGB source PDF must embed.",
+    "Every CMYK value here is a stored operator value for the target profile, not a physical measurement.",
+    "Run install/verify.sh after editing."
+  ],
+  "version": 1,
+  "contractId": "replace-with-brand-date",
+  "brandColor": "BRAND_GREEN",
+  "colors": {
+    "BRAND_GREEN": {
+      "semanticRole": "brand-surface",
+      "description": "Canonical brand surface colour for this job.",
+      "figma": {
+        "rgbHex": "#A2BC97",
+        "rgb255": [162, 188, 151],
+        "paintOpacity": 1,
+        "paintBlendMode": "NORMAL"
+      },
+      "cmyk": {
+        "percent": [40.0, 10.6, 45.1, 5.1],
+        "bytes8": [102, 27, 115, 13],
+        "maxPercentDeviation": 0.05,
+        "tacPercent": 100.8
+      },
+      "outputMode": "process-cmyk",
+      "regions": [
+        {
+          "label": "replace-with-region-label",
+          "jobNode": "0:0",
+          "paintNode": "0:0",
+          "paintIndex": 0,
+          "bboxPx": [0, 0, 1, 1],
+          "framePx": [1, 1],
+          "coverage": "full-bleed",
+          "sample": [0.05, 0.45, 0.15, 0.55],
+          "note": "Replace with the real Figma node id, bbox and a sample rectangle that contains only this colour."
+        }
+      ]
+    },
+    "SECONDARY_GREEN": {
+      "semanticRole": "semantic-icon",
+      "description": "Separate semantic colour. Never merge it into BRAND_GREEN.",
+      "figma": {
+        "rgbHex": "#00A97E",
+        "rgb255": [0, 169, 126]
+      },
+      "cmyk": {
+        "percent": [76.9, 1.6, 62.0, 0.4],
+        "bytes8": [196, 4, 158, 1],
+        "tacPercent": 140.9
+      },
+      "outputMode": "process-cmyk",
+      "regions": []
+    }
+  },
+  "profiles": {
+    "source": {
+      "required": true,
+      "description": "sRGB2014 or your source RGB profile",
+      "space": "RGB",
+      "path": "color/profiles/your-source-rgb.icc",
+      "sha256": "replace-with-shasum-of-the-source-icc",
+      "policy": "The source PDF must embed exactly this profile. Untagged RGB or any other RGB profile is refused."
+    },
+    "target": {
+      "description": "ISO Coated v2 300% (ECI)",
+      "space": "CMYK",
+      "path": "color/profiles/iso-coated-v2-300.icc",
+      "sha256": "replace-with-shasum-of-the-delivery-icc",
+      "outputConditionIdentifier": "FOGRA39",
+      "outputCondition": "ISO Coated v2 300% (ECI), FOGRA39L, ISO 12647-2:2004/Amd 1, TAC 300%",
+      "registryName": "http://www.color.org",
+      "policy": "The conversion target and the single PDF/X-4 OutputIntent profile. DeviceCMYK artwork is interpreted through this OutputIntent; no ICCBased CMYK re-declaration of the same profile is allowed."
+    },
+    "renderRGB": {
+      "description": "sRGB2014 or your proof RGB profile",
+      "space": "RGB",
+      "path": "color/profiles/your-render-rgb.icc",
+      "sha256": "replace-with-shasum-of-the-render-icc",
+      "policy": "Explicit destination for every ICC-managed RGB render used by proof and Gate 3."
+    }
+  },
+  "conversion": {
+    "engine": "Ghostscript",
+    "singleConversionPoint": "scripts/01-prepare.sh",
+    "renderingIntent": 1,
+    "renderingIntentName": "Relative Colorimetric",
+    "blackPointCompensation": true,
+    "colorConversionStrategy": "CMYK",
+    "processColorModel": "DeviceCMYK",
+    "overrideICC": false,
+    "note": "One controlled RGB to CMYK conversion. Intent and BPC are recorded and verified on control patches; they are not inferred from the renderer."
+  },
+  "pdf": {
+    "standard": "PDF/X-4",
+    "standardRevision": "ISO 15930-7:2010",
+    "outputIntentSubtype": "GTS_PDFX",
+    "outputIntentCount": 1,
+    "requireTrailerId": true,
+    "requireXmp": true,
+    "forbidArtBox": true,
+    "forbidDefaultCMYKForArtwork": true,
+    "defaultCMYKPolicy": "No /DefaultCMYK in printable content. DeviceCMYK under one matching CMYK OutputIntent is the supported model. An ICCBased CMYK default space identical to the OutputIntent is a reader-dependent re-mapping hazard and is excluded by this workflow.",
+    "xmp": {
+      "pdfxidGTS_PDFXVersion": "PDF/X-4",
+      "trapped": "False",
+      "requireMetadataDate": true,
+      "requireDocumentId": true,
+      "requireInstanceId": true,
+      "requireVersionId": true,
+      "requireRenditionClass": true
+    }
+  },
+  "acceptance": {
+    "tacLimitPercent": 300,
+    "quantization": "8-bit byte equality, plus a raw percent deviation of at most 0.05 percentage points from the approved tuple",
+    "expectedCmykBytes": [102, 27, 115, 13],
+    "expectedPlateBytesInverted": [153, 228, 140, 242],
+    "forbidSecondBrandTuple": true,
+    "forbidImplicitDeviceCMYK": true,
+    "renderRequiresExplicitProfiles": true,
+    "managedRenderControl": "A deliberately different CMYK output profile must change the plate reading. If it does not, the renderer is not colour-managed and the gate must fail.",
+    "note": "All values are stored operator values and ICC predictions, not physical measurements. Printer RIP output space, contract proof and press measurement remain external."
+  }
+}
